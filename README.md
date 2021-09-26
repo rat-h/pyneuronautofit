@@ -3,6 +3,7 @@
 
 ### Scripts, templates, and helpers to fit neuron model
 
+|                                    |                 |
 |:---------------------------------:|:----------------:|
 |├── README.md                      | This file        |
 |├── pyneuronautofit                | module with extension of inspyred |
