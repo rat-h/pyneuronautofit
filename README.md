@@ -1,12 +1,13 @@
-# Scripts, templates, and helpers to fit neuron model
+# A set of tools for fitting single- or multi-compartment neuron models parameters, using NSGA2 or Krayzman's dynamically weighted multi-objective optimization
 
-### Files 
+
+### Scripts, templates, and helpers to fit neuron model
 
 |:---------------------------------:|:----------------:|
 |├── README.md                      | This file        |
 |├── pyneuronautofit                | module with extension of inspyred |
-|│   ├── autofit.py                  |
-|│   ├── evaluator.py                 |
+|│   ├── autofit.py                  | |
+|│   ├── evaluator.py                 | evaluates a model
 |│   ├── fitter.py                    | main script for fitting|
 |│   ├── __init__.py                   |            |
 |│   ├── __main__.py -> fitter.py     | just link for `python -m pyneuronautofit` |
