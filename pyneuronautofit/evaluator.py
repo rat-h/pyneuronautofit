@@ -6,22 +6,27 @@ from scipy import stats as spstats
 class Evaluator():
     def __init__(self, inputfile:(str,None), mode:str="RALMN", mask:(dict,list,tuple,int,None)=None,\
                        prespike:int=10, postspike:int=20, spikethreshold:float=0., spikecount:(int,None)=-1,\
+                       spikeweight:(float,None)=None, downsampler=None,\
+                       vpvsize:int=5,\
                        pedant:bool=True, collapse_tests:bool=False, savetruedata:bool=False):
         """
         mode: (str)
-            T - spike times
+            A - average spike shape during stimulus            
+            C - distance between voltages during stimulus
+            D - distance between voltages during after stimulus tails
             S - spike shapes during stimulus
-            U - squared error of subthreshold voltage
-            W - spike width during stimulus
+            T - spike times
             R - resting potential
             L - post-stimulus tail statistics
             M - voltage stimulus statistics
-            A - average spike shape during stimulus
             N - number of spikes
-            C - distance between voltages during stimulus
-            D - distance between voltages during after stimulus tails
-            V - distance between voltages
             O - Just total number of spikes
+            P - difference in probability dencity on v,dv/dt plane weighted by 1 - target_dencity/sum(target_dencity)
+            Q - the same as P but only during stimulus.  
+            U - squared error of subthreshold voltage
+            V - distance between voltages
+            W - spike width during stimulus
+            Z - distance between voltages with zooming weight on spikes
         mask:
             if (int):
                 use from all traces upto this index
@@ -42,6 +47,13 @@ class Evaluator():
         self.pedant         = pedant
         self.collapse       = collapse_tests
         self.savetruedata   = savetruedata
+        self.spikeweight    = spikeweight
+        #if self.spikeweight is None: self.spikeweight = 1.
+        self.spikezoomers   = None
+        self.downsampler    = downsampler
+        self.vpvsize        = vpvsize
+        self.vpvPxyw        = None
+        self.vpvQxyw        = None
         
         
         if not inputfile is None:
@@ -103,7 +115,9 @@ class Evaluator():
                 return io in self.mask[mod]
             logging.error(f"Unknown mask type {type(self.mask[mod])} for mode {mod}")
             raise BaseException(f"Unknown mask type {type(self.mask[mod])} for mode {mod}")
-            
+        #DB>>
+        print(self.mask,mod)
+        #<<DB
         logging.error(f"Unknown mask type {type(self.mask[mod])}")
         raise BaseException(f"Unknown mask type {type(self.mask[mod])}")
         
@@ -123,7 +137,27 @@ class Evaluator():
         if 'D' in self.mode: rend['D'] = []
         if 'V' in self.mode: rend['V'] = []
         if 'O' in self.mode: rend['O'] = []
-
+        if 'Z' in self.mode:
+           rend['Z'] = []
+           if self.spikezoomers is None:
+                self.spikezoomers = []
+                setzoomers        = True
+           else:
+                setzoomers        = False
+        if 'P' in self.mode:
+            rend['P'] = []
+            if self.vpvPxyw is None:
+                self.vpvPxyw      = []
+                setPvpv           = True
+            else:
+                setPvpv           = False
+        if 'Q' in self.mode:
+            rend['Q'] = []
+            if self.vpvQxyw is None:
+                self.vpvQxyw      = []
+                setQvpv           = True
+            else:
+                setQvpv           = False
         for io,o in enumerate(obsdata):
             # if 'S' in self.mode: rend['S'].append([])
             # if 'T' in self.mode: rend['T'].append([])
@@ -133,11 +167,40 @@ class Evaluator():
                 if self._cmam(n,io): rend[n].append([])
             if self._cmam('U',io): rend['U'].append( copy(o) )
             if self._cmam('V',io): rend['V'].append( copy(o) )
-
             
             if self._cmam('R',io):
                 rend['R'] = o[:self.stimLidx] if rend['R'] is None else concatenate((rend['R'],o[:self.stimLidx]))
+
             spkidx = self.getspikeidx(o)
+            if self._cmam('Z',io):
+                rend['Z'].append( copy(o) )
+                if setzoomers:
+                    self.spikezoomers.append( ones(o.shape[0]) )
+                    idu,idd = spkidx
+                    if len(spkidx[0]) > 0:
+                        sw = ( o.shape[0]/len(spkidx[0]) ) if self.spikeweight is None else (
+                            self.spikeweight if self.spikeweight > 0. else ( o.shape[0]*abs(self.spikeweight)/len(spkidx[0]) ) )
+                        for u,d in zip(*spkidx):
+                            self.spikezoomers[-1][u:d] = sw
+            if self._cmam('P',io):
+                dvdt  = (o[1:]-o[:-1])/self.expdt
+                v     = (o[1:]+o[:-1])/2
+                if setPvpv:
+                    self.vpvPxyw.append([amin(v),amax(v),amin(dvdt),amax(dvdt)])
+                else :
+                    h,_,_ = histogram2d(v,dvdt,bins=self.vpvPxyw[0])
+                    h = h.T
+                    rend['P'].append(h)
+            if self._cmam('Q',io):
+                dvdt  = (o[self.stimLidx+1:self.stimRidx]-o[self.stimLidx:self.stimRidx-1])/self.expdt
+                v     = (o[self.stimLidx+1:self.stimRidx]+o[self.stimLidx:self.stimRidx-1])/2
+                if setQvpv:
+                    self.vpvQxyw.append([amin(v),amax(v),amin(dvdt),amax(dvdt)])
+                else :
+                    h,_,_ = histogram2d(v,dvdt,bins=self.vpvQxyw[0])
+                    h = h.T
+                    rend['Q'].append(h)
+
             if self._cmam('N',io):
                 # #DB>>
                 # print(f"  N:{io}")
@@ -210,6 +273,37 @@ class Evaluator():
             if self._cmam('A',io):
                 rend['A'][-1] = (ones(self.prespike+self.postspike)*1e3) if rend['A'][-1][0] is None else (rend['A'][-1][0]/rend['A'][-1][1])
 
+        if ('P' in  self.mode and setPvpv) or ('Q' in self.mode and setQvpv):
+            if 'P' in  self.mode and setPvpv:
+                self.vpvPxyw = array(self.vpvPxyw)
+                self.vpvPxyw = [ [amin(self.vpvPxyw,axis=0)[0], amax(self.vpvPxyw,axis=0)[1]],[amin(self.vpvPxyw,axis=0)[2],amax(self.vpvPxyw,axis=0)[3]]]
+                self.vpvPxyw = [ self.vpvPxyw, [] ] 
+            if 'Q' in self.mode and setQvpv:
+                self.vpvQxyw = array(self.vpvQxyw)
+                self.vpvQxyw = [ [amin(self.vpvQxyw,axis=0)[0], amax(self.vpvQxyw,axis=0)[1]],[amin(self.vpvQxyw,axis=0)[2],amax(self.vpvQxyw,axis=0)[3]]]
+                self.vpvQxyw = [ self.vpvQxyw, [] ] 
+            for io,o in enumerate(obsdata):
+                if self._cmam('P',io) and setPvpv:
+                    dvdt  = (o[1:]-o[:-1])/self.expdt
+                    v     = (o[1:]+o[:-1])/2
+                    h,Px,Py = histogram2d(v,dvdt,bins=self.vpvsize,range=self.vpvPxyw[0])
+                    h = h.T
+                    w = 1. - h/sum(h)
+                    self.vpvPxyw[1].append( w )
+                    rend['P'].append(h)
+                if self._cmam('Q',io) and setQvpv:
+                    dvdt  = (o[self.stimLidx+1:self.stimRidx]-o[self.stimLidx:self.stimRidx-1])/self.expdt
+                    v     = (o[self.stimLidx+1:self.stimRidx]+o[self.stimLidx:self.stimRidx-1])/2
+                    h,Qx,Qy = histogram2d(v,dvdt,bins=self.vpvsize,range=self.vpvQxyw[0])
+                    h = h.T
+                    w = 1. - h/sum(h)
+                    self.vpvQxyw[1].append( w )
+                    rend['Q'].append(h)
+            if 'P' in  self.mode and setPvpv:
+                self.vpvPxyw = [[Px,Py],self.vpvPxyw[1] ]
+            if 'Q' in self.mode and setQvpv:
+                self.vpvQxyw = [[Qx,Qy],self.vpvQxyw[1] ]
+                
         if 'R' in self.mode:
             rend['R'] = array( [mean(rend['R']), std(rend['R'])] )
         if 'L' in self.mode: rend['L'] = array(rend['L'])
@@ -265,19 +359,22 @@ class Evaluator():
     
     def readABF(self,abf:str):
         import pyabf
-        logging.debug(f"Reading ABF: {abf}")
+        logging.info(f"Reading ABF: {abf}")
         rec = pyabf.ABF(abf)
-        logging.debug(f"   > Units     = {rec.adcUnits}")
+        logging.info(f"   > Chan N    = {rec.channelCount}")
+        logging.info(f"   > Units     = {rec.adcUnits}")
         self.expdt = 1000./float(rec.dataRate)
-        logging.debug(f"   > Chan N    = {rec.channelCount}")
+        if self.downsampler is not None:
+               self.expdt = self.downsampler(self.expdt)
+        logging.info(f"   > Sampling  = {self.expdt } [{1000./float(rec.dataRate)}]")
         TrueData = []
         self.TestCurr = []
         self.tmax  = -1000
         for sweepNumber in rec.sweepList:
             rec.setSweep(sweepNumber = sweepNumber, channel=0)	
-            TrueData.append( array(rec.sweepY) )
+            TrueData.append( array(rec.sweepY) if self.downsampler is None else self.downsampler(array(rec.sweepY)) )
             rec.setSweep(sweepNumber = sweepNumber, channel=1)	
-            self.TestCurr.append( array(rec.sweepY) )
+            self.TestCurr.append( array(rec.sweepY) if self.downsampler is None else self.downsampler(array(rec.sweepY)) )
             if self.tmax < TrueData[-1].shape[0]*self.expdt:
                 self.tmax = TrueData[-1].shape[0]*self.expdt
         self._detect_stims(self.TestCurr,self.expdt)
@@ -288,6 +385,7 @@ class Evaluator():
         
     
     def readNPZ(self,npz:str):
+        logging.info(f"Reading NPZ: {npz}")
         with load(npz) as npx:
             self.mode           = npx["mode"]
             self.mask           = npx["mask"]
@@ -304,10 +402,13 @@ class Evaluator():
             self.stimRidx       = npx["stimRidx"]
             self.stimLtime      = npx["stimLtime"]
             self.stimRtime      = npx["stimRtime"]
+            self.spikeweight    = npx["spikeweight"]
+            self.spikezoomers   = npx["spikezoomers"]
+            self.vpvsize        = npx["vpvsize"]
+            self.vpvPxyw        = npx["vpvPxyw"]
+            self.vpvQxyw        = npx["vpvQxyw"]
             self.cond           = npx["cond"]
             self.TestCurr       = npx["currents"]
-
-        logging.debug(f"Reading NPZ: {npz}")
         self.__log_data_stats_()
         
         
@@ -329,6 +430,11 @@ class Evaluator():
             stimRidx        = self.stimRidx,
             stimLtime       = self.stimLtime,
             stimRtime       = self.stimRtime,
+            spikeweight    =  self.spikeweight,
+            spikezoomers   =  self.spikezoomers,
+            vpvsize        =  self.vpvsize,
+            vpvPxyw        =  self.vpvPxyw,
+            vpvQxyw        =  self.vpvQxyw,
             cond            = self.cond,
             currents        = self.TestCurr
         )
@@ -464,6 +570,11 @@ class Evaluator():
         n.stimRidx       =  self.stimRidx
         n.stimLtime      =  self.stimLtime
         n.stimRtime      =  self.stimRtime
+        n.spikeweight    =  self.spikeweight
+        n.spikezoomers   =  self.spikezoomers
+        n.vpvsize        =  self.vpvsize
+        n.vpvPxyw        =  self.vpvPxyw
+        n.vpvQxyw        =  self.vpvQxyw
         n.cond           =  data if data is None else n.assess(data) 
         n.TestCurr       =  []
         return n
@@ -471,54 +582,61 @@ class Evaluator():
 
     def vector(self,marks=False)->list:
         vec = []
-        if 'U' in self.mode:
-            vec +=  [ o.tolist() for o in self.cond['U'] ]
-        if 'V' in self.mode:
-            vec +=  [ o.tolist() for o in self.cond['V'] ]
+        for n in 'R L M N O'.split():
+            if n in self.mode:
+                vec += self.cond[n].tolist()
+        for n in 'U V Z C D A'.split():
+               if n in self.mode:
+                    vec +=  [ o.tolist() for o in self.cond[n] ]
         if 'S' in self.mode:
             vec +=  [ [ p.tolist() for p in o] for o in self.cond['S'] ]
         if 'T' in self.mode:
             vec +=  self.cond['T']
         if 'W' in self.mode:
             vec +=  self.cond['W']
-        if 'A' in self.mode:
-            vec +=  [ o.tolist() for o in self.cond['A'] ]
-
-        for n in 'R L M N O'.split():
-            if n in self.mode:
-                vec += self.cond[n].tolist()
-
-        if 'C' in self.mode:
-            vec += [ o.tolist() for o in self.cond['C'] ]
-        if 'D' in self.mode:
-            vec += [ o.tolist() for o in self.cond['D'] ]
         return vec
 
     
     def scores(self,marks=False)->list:
         clone0 = self.clone(None)
         clone0.cond = {}
-        if 'U' in self.mode:
-            clone0.cond['U'] =  [ zeros(o.shape) for o in self.cond['U'] ]
-        if 'V' in self.mode:
-            clone0.cond['V'] =  [ zeros(o.shape) for o in self.cond['V'] ]
+        for n in 'U V Z C D A'.split():
+            if n in self.mode:
+                clone0.cond[n] =  [ zeros(o.shape) for o in self.cond[n] ]
+        
+        if 'P' in self.mode:
+            clone0.cond['P'] =  [  ]
+            for rid,o in enumerate(self.cond['P']):
+                clone0.cond['P'].append(zeros(o.shape))
+                x =where(self.vpvPxyw[0][0]>0.)[0]
+                x = x[0] if x.shape[0] > 0 else (o.shape[0] - 1)
+                y =where(self.vpvPxyw[0][1]>0.)[0]
+                y = y[0] if y.shape[0] > 0 else (o.shape[1] - 1)
+                if x >= o.shape[0] : x = o.shape[0] - 1
+                if y >= o.shape[1] : y = o.shape[1] - 1
+                clone0.cond['P'][-1][x,y] = sum(o)
+        if 'Q' in self.mode:
+            clone0.cond['Q'] =  [  ]
+            for rid,o in enumerate(self.cond['Q']):
+                clone0.cond['Q'].append(zeros(o.shape))
+                x =where(self.vpvQxyw[0][0]>0.)[0]
+                x = x[0] if x.shape[0] > 0 else (o.shape[0] - 1)
+                y =where(self.vpvQxyw[0][1]>0.)[0]
+                y = y[0] if y.shape[0] > 0 else (o.shape[1] - 1)
+                if x >= o.shape[0] : x = o.shape[0] - 1
+                if y >= o.shape[1] : y = o.shape[1] - 1
+                clone0.cond['Q'][-1][x,y] = sum(o)
+
         if 'S' in self.mode:
             clone0.cond['S'] =  [ [zeros(p.shape) for p in o] for o in self.cond['S'] ]
         if 'T' in self.mode:
             clone0.cond['T'] =  [ [ 0. for p in x ] for x in   self.cond['T'] ]
         if 'W' in self.mode:
             clone0.cond['W'] =  [ [ 0. for p in x ] for x in   self.cond['W'] ]
-        if 'A' in self.mode:
-            clone0.cond['A'] =  [ zeros(o.shape) for o in self.cond['A'] ]
 
         for n in 'R L M N O'.split():
             if n in self.mode:
                 clone0.cond[n] = zeros(self.cond[n].shape)
-
-        if 'C' in self.mode:
-            clone0.cond['C'] = [ zeros(o.shape) for o in self.cond['C'] ]
-        if 'D' in self.mode:
-            clone0.cond['D'] = [ zeros(o.shape) for o in self.cond['D'] ]
         return self.diff(clone0,marks=marks)
     
 
@@ -723,14 +841,55 @@ class Evaluator():
         return rend
     def spikecount_error(self,oo)->list:
         if self.cond is None or oo.cond is None:
-            return [ None for i in range(self.Nrec) if self._cmam('V',i)]
+            return [ None for i in range(self.Nrec) if self._cmam('O',i)]
         if self.cond['O'].shape[0] != oo.cond['O'].shape[0]:
                 logging.error("Numbers of O-conditions are different\n\n")
                 raise RuntimeError("Numbers of O-conditions are different")
         if self.collapse:
             return sum(abs(self.cond['O']-oo.cond['O']))
         return abs(self.cond['O']-oo.cond['O']).tolist()
-    def diff(self, oo, marks:bool=False)->list:
+    def zoomedspike_error(self,oo)->list:
+        if self.cond is None or oo.cond is None:
+            return [ None for i in range(self.Nrec) if self._cmam('Z',i)]
+        if len(self.cond['Z']) != len(oo.cond['Z']):
+            logging.error("Numbers of Z-conditions are different:{} vs {}\n\n".format(len(self.cond['Z']), len(oo.cond['Z'])))
+            raise RuntimeError("Numbers of Z-conditions are different:{} vs {}\n\n".format(len(self.cond['Z']), len(oo.cond['Z'])))
+        rend = []
+        for vl1,vl2,w in zip(self.cond['Z'],oo.cond['Z'],self.spikezoomers):
+            m = min(vl1.shape[0],vl2.shape[0])
+            rend.append(sum(abs(vl1[:m]-vl2[:m])*w[:m])/sum(w[:m]))
+        if self.collapse:
+            return mean( array(rend) )
+        return rend
+    def vpv_total_error(self,oo)->list:
+        if self.cond is None or oo.cond is None:
+            return [ None for i in range(self.Nrec) if self._cmam('P',i)]
+        if len(self.cond['P']) != len(oo.cond['P']):
+            logging.error("Numbers of P-conditions are different:{} vs {}\n\n".format(len(self.cond['P']), len(oo.cond['P'])))
+            raise RuntimeError("Numbers of P-conditions are different:{} vs {}\n\n".format(len(self.cond['P']), len(oo.cond['P'])))
+        rend = []
+        for h1,h2,w in zip(self.cond['P'],oo.cond['P'],self.vpvPxyw[1]):
+            rend.append( sum(abs(h1-h2)*w) )
+            # rend.append( sum(abs(h1-h2)) )
+            # rend.append( sum(abs(h1-h2)*w)/sum(w) )
+        if self.collapse:
+            return sum( array(rend) )
+        return rend
+    def vpv_stimulus_error(self,oo)->list:
+        if self.cond is None or oo.cond is None:
+            return [ None for i in range(self.Nrec) if self._cmam('Q',i)]
+        if len(self.cond['Q']) != len(oo.cond['Q']):
+            logging.error("Numbers of Q-conditions are different:{} vs {}\n\n".format(len(self.cond['Q']), len(oo.cond['Q'])))
+            raise RuntimeError("Numbers of Q-conditions are different:{} vs {}\n\n".format(len(self.cond['Q']), len(oo.cond['Q'])))
+        rend = []
+        for h1,h2,w in zip(self.cond['Q'],oo.cond['Q'],self.vpvQxyw[1]):
+            rend.append( sum(abs(h1-h2)*w) )
+            # rend.append( sum(abs(h1-h2)) )
+            # rend.append( sum(abs(h1-h2)*w)/sum(w) )
+        if self.collapse:
+            return sum( array(rend) )
+        return rend
+    def diff(self, oo, marks:bool=False, nummark:bool=False)->list:
         if oo.mode != self.mode:
             logging.error(f"Different modes {oo.mode} vs {self.mode}")
             RuntimeError( f"Different modes {oo.mode} vs {self.mode}")
@@ -756,22 +915,47 @@ class Evaluator():
         d = self.tailvoltdf_error(oo)   if "D" in self.mode else []        
         v = self.totlvoltdf_error(oo)   if "V" in self.mode else []
         o = self.spikecount_error(oo)   if "O" in self.mode else []
-
+        z = self.zoomedspike_error(oo)  if "Z" in self.mode else []
+        p = self.vpv_total_error(oo)    if "P" in self.mode else []
+        q = self.vpv_stimulus_error(oo) if "Q" in self.mode else []
         rend = []
-        for _ in self.mode:
-            if _ == "U": rend += [ ['U',x] for x in u ] if marks else u
-            if _ == "T": rend += [ ['T',x] for x in t ] if marks else t
-            if _ == "S": rend += [ ['S',x] for x in s ] if marks else s
-            if _ == "W": rend += [ ['W',x] for x in w ] if marks else w
-            if _ == "R": rend += [ ['R',x] for x in r ] if marks else r
-            if _ == "L": rend += [ ['L',x] for x in l ] if marks else l
-            if _ == "M": rend += [ ['M',x] for x in m ] if marks else m
-            if _ == "A": rend += [ ['A',x] for x in a ] if marks else a
-            if _ == "N": rend += [ ['N',x] for x in n ] if marks else n
-            if _ == "C": rend += [ ['C',x] for x in c ] if marks else c
-            if _ == "D": rend += [ ['D',x] for x in d ] if marks else d
-            if _ == "V": rend += [ ['V',x] for x in v ] if marks else v
-            if _ == "O": rend += [ ['O',x] for x in o ] if marks else o
+        if nummark:
+            for _ in self.mode:
+                if _ == "U": rend += [ [f'U{i:02d}',x] for i,x in enumerate(u) ] if marks else u
+                if _ == "T": rend += [ [f'T{i:02d}',x] for i,x in enumerate(t) ] if marks else t
+                if _ == "S": rend += [ [f'S{i:02d}',x] for i,x in enumerate(s) ] if marks else s
+                if _ == "W": rend += [ [f'W{i:02d}',x] for i,x in enumerate(w) ] if marks else w
+                if _ == "R": rend += [ [f'R{i:02d}',x] for i,x in enumerate(r) ] if marks else r
+                if _ == "L": rend += [ [f'L{i:02d}',x] for i,x in enumerate(l) ] if marks else l
+                if _ == "M": rend += [ [f'M{i:02d}',x] for i,x in enumerate(m) ] if marks else m
+                if _ == "A": rend += [ [f'A{i:02d}',x] for i,x in enumerate(a) ] if marks else a
+                if _ == "N": rend += [ [f'N{i:02d}',x] for i,x in enumerate(n) ] if marks else n
+                if _ == "C": rend += [ [f'C{i:02d}',x] for i,x in enumerate(c) ] if marks else c
+                if _ == "D": rend += [ [f'D{i:02d}',x] for i,x in enumerate(d) ] if marks else d
+                if _ == "V": rend += [ [f'V{i:02d}',x] for i,x in enumerate(v) ] if marks else v
+                if _ == "O": rend += [ [f'O{i:02d}',x] for i,x in enumerate(o) ] if marks else o
+                if _ == "Z": rend += [ [f'Z{i:02d}',x] for i,x in enumerate(z) ] if marks else z
+                if _ == "P": rend += [ [f'P{i:02d}',x] for i,x in enumerate(p) ] if marks else p
+                if _ == "Q": rend += [ [f'Q{i:02d}',x] for i,x in enumerate(q) ] if marks else q
+        else:
+            for _ in self.mode:
+                if _ == "U": rend += [ [f'U',x] for x in u ] if marks else u
+                if _ == "T": rend += [ [f'T',x] for x in t ] if marks else t
+                if _ == "S": rend += [ [f'S',x] for x in s ] if marks else s
+                if _ == "W": rend += [ [f'W',x] for x in w ] if marks else w
+                if _ == "R": rend += [ [f'R',x] for x in r ] if marks else r
+                if _ == "L": rend += [ [f'L',x] for x in l ] if marks else l
+                if _ == "M": rend += [ [f'M',x] for x in m ] if marks else m
+                if _ == "A": rend += [ [f'A',x] for x in a ] if marks else a
+                if _ == "N": rend += [ [f'N',x] for x in n ] if marks else n
+                if _ == "C": rend += [ [f'C',x] for x in c ] if marks else c
+                if _ == "D": rend += [ [f'D',x] for x in d ] if marks else d
+                if _ == "V": rend += [ [f'V',x] for x in v ] if marks else v
+                if _ == "O": rend += [ [f'O',x] for x in o ] if marks else o
+                if _ == "Z": rend += [ [f'Z',x] for x in z ] if marks else z
+                if _ == "P": rend += [ [f'P',x] for x in p ] if marks else p
+                if _ == "Q": rend += [ [f'Q',x] for x in q ] if marks else q
+            
         #DB>>
         # print(f"DB>> u={len(u)}, t={len(t)}, s={len(s)}, w={len(w)}")
         # print(f"DB>> r={len(r)}, l={len(l)}, m={len(m)}, a={len(a)}, n={len(n)}")
@@ -798,4 +982,7 @@ class Evaluator():
             if 'D'  == _: ret += [ 'D' for i in range(self.Nrec) if self._cmam('D',i) ]
             if 'V'  == _: ret += [ 'V' for i in range(self.Nrec) if self._cmam('V',i) ]
             if 'O'  == _: ret += [ 'O' for i in range(self.Nrec) if self._cmam('O',i) ]
+            if 'Z'  == _: ret += [ 'Z' for i in range(self.Nrec) if self._cmam('Z',i) ]
+            if 'P'  == _: ret += [ 'P' for i in range(self.Nrec) if self._cmam('P',i) ]
+            if 'Q'  == _: ret += [ 'Q' for i in range(self.Nrec) if self._cmam('Q',i) ]
         return "".join(ret)

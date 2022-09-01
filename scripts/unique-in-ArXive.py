@@ -1,5 +1,5 @@
 from numpy import *
-import json, gzip, os
+import json, gzip, os, sys
 from optparse import OptionParser
 
 oprs = OptionParser("USAGE: %prog [flags] [flags] input.json[.gzip] ouput.json")
@@ -25,7 +25,7 @@ oprs.add_option("-r", "--road-map",         dest="rmap",  default=None,         
 
 opt, args = oprs.parse_args()
 
-if len(args) != 2:
+if len(args) != 1:
     print(f"USAGE {sys.argv[0]} [flags] input.json[.gzip] ouput.json")
     print(f"Run {sys.argv[0]} -h for more options")
     exit(1)
@@ -51,7 +51,9 @@ def read_arxive(fd):
         cmd        = None
     elif type(arx) is dict:
         markers    = arx['markers']    if 'markers'    in arx else None
-        targets    = arx['bvalues']    if 'bvalues'    in arx else None
+        bvalues    = arx['bvalues']    if 'bvalues'    in arx else None
+        target     = arx['target']     if 'target'     in arx else None
+        evaluation = arx['evaluation'] if 'evaluation' in arx else None
         parameters = arx['parameters'] if 'parameters' in arx else None
         version    = arx['version']    if 'version'    in arx else None
         cmd        = arx['cmd']        if 'cmd'        in arx else None
@@ -64,7 +66,7 @@ def read_arxive(fd):
     else:
         sys.stderr.write(f"Wrong format of arXive {type(arx)}\n")
         exit(1)
-    return arXive,markers,targets,parameters,version,cmd
+    return arXive,markers,bvalues,parameters,version,cmd,target,evaluation
     
 """
 
@@ -76,14 +78,17 @@ if   fext == ".gz":
     print( "=========================")
     print(f"Reading GZIP {args[0]}")
     with gzip.open(args[0],'r') as fd:
-        arXive,markers,targets,\
-        parameters,version,cmd = read_arxive(fd)
+        arXive,markers,bvalues,\
+        parameters,version,cmd,\
+        target,evaluation = read_arxive(fd)
     print( "==================== DONE")
 elif fext == ".json":
     print( "=========================")
     print(f"Reading JSON {args[0]}")
     with open(args[0],'r') as fd:
-        arXive,markers,targets,parameters,version,cmd = read_arxive(fd)
+        arXive,markers,bvalues,\
+        parameters,version,cmd,\
+        target,evaluation = read_arxive(fd)
     print( "==================== DONE")
 else:
     sys.stderr.write(f"Unknown input file extension {fext}")
@@ -96,7 +101,7 @@ vectors = array([ v for s,v in arXive ])
 u,idx  = unique(vectors,axis=0,return_index=True)
 UniqueArXive = [arXive[i] for i in idx.astype(int) ]
 
-if not (opt.weight or opt.sas or opt.smn or opt.fas): opt.weight = True
+if not (opt.weight or opt.sas or opt.smn or opt.fas): opt.smn = True
     
 if opt.weight:
     print("Computing var/score weights scales")
@@ -135,14 +140,21 @@ if opt.sort: UniqueArXive = sorted(UniqueArXive)
 
 print(len(arXive),"=>",len(UniqueArXive))
 
-fname, fext = os.path.splitext(args[1])
+if len(args) > 1:
+    outputfilename = args[1]
+else:
+	outputfilename = args[0].replace("arXive","unique").replace("final","unique")
+
+fname, fext = os.path.splitext(outputfilename)
 
 def saveJson(fd):
     fd.write('{\n')
     fd.write("\t\"markers\"   :" + json.dumps(markers)   +",\n")
-    fd.write("\t\"bvalues\"   :" + json.dumps(targets)   +",\n")
+    fd.write("\t\"bvalues\"   :" + json.dumps(bvalues)   +",\n")
     fd.write("\t\"parameters\":" + json.dumps(parameters)+",\n")
     fd.write("\t\"version\"   :" + json.dumps(version)   +",\n")
+    fd.write("\t\"target\"    :" + json.dumps(target)   +",\n")
+    fd.write("\t\"evaluation\":" + json.dumps(evaluation)   +",\n")
     fd.write("\t\"cmd\"       :" + json.dumps(cmd)       +",\n")
     fd.write("\t\"unique\"    : [\n")
     for w,s,p in UniqueArXive:
@@ -151,20 +163,22 @@ def saveJson(fd):
             
 
 if   fext == ".json":
-    with open(args[1],"w") as fd:
+    with open(outputfilename,"w") as fd:
         saveJson(fd)
 elif fext == ".gz":
-    with gzip.open(args[1],"wt") as fd:
+    with gzip.open(outputfilename,"wt") as fd:
         saveJson(fd)
 elif fext == ".npz":
     UniqueArXive = [ (w,array(s),array(v)) for w,s,v in UniqueArXive ] if recv == 3 else [ (array(s),array(v)) for s,v in UniqueArXive ]
-    savez(args[1],
+    savez(outputfilename,
         markers = markers,
-        bvalues = targets,
+        bvalues = bvalues,
         parameters = json.dumps(parameters),
         version = version,
-        cmd     = cmd,
-        arXive  = UniqueArXive
+        target  = target,
+        evaluation = json.dumps(evaluation),
+        cmd        = cmd,
+        arXive     = UniqueArXive
     )
 
 if not opt.rmap is None:

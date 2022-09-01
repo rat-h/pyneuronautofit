@@ -3,7 +3,7 @@ from numpy import *
 from numpy import random as nprnd
 #from inspyred.ec.variators.mutators   import mutator 
 from inspyred.ec.variators.crossovers import crossover 
-import copy, json, os
+import copy, json
 
 def af_mod2ec(modprms,param_ranges):
     ecprms = []
@@ -25,7 +25,15 @@ def af_ec2mod(ecprms,param_ranges):
         if   pscale == 'lin': 
             modprms.append( ecp )
         elif pscale == 'log':
-            modprms.append( 10.**ecp )
+            try:
+                modv = 10.**ecp
+            except:
+               logging.error(f"Log-scale broken:{pname},{pscale},{lo},{hi} got {ecp} in {ecprms}")
+               raise RuntimeError(f"Log-scale broken:{pname},{pscale},{lo},{hi} got {ecp} in {ecprms}")
+            if not isfinite(modv):
+               logging.error(f"Log-scale broken:{pname},{pscale},{lo},{hi} got {ecp} in {ecprms}")
+               raise RuntimeError(f"Log-scale broken:{pname},{pscale},{lo},{hi} got {ecp} in {ecprms}")
+            modprms.append( modv )
         elif pscale == 'con':
             modprms.append( ecp )
         else :
@@ -128,23 +136,53 @@ class af_bounder(object):
         for i, (c, (pname, pscale, lo, hi)) in enumerate(zip(candidate, self.param_ranges)):
             hi = __getV__(hi,d)
             lo = __getV__(lo,d)
-            if   pscale == 'lin' or pscale == 'log': bound.append(hi)
-            elif pscale == 'con'                   : bound.append(lo)  
-            else :
-                logger.error(f'unknown scalier {pscale}')
-                raise RuntimeError(f'unknown scalier {pscale}')
-            d[pname] = c
+            if self.logscale:
+                if   pscale == 'lin':
+                    bound.append(hi)
+                    d[pname] = c
+                elif pscale == 'log':
+                    bound.append(log10(hi))
+                    d[pname] = 10.**c
+                elif pscale == 'con':
+                    bound.append(lo)
+                    d[pname] = c
+                else :
+                    logger.error(f'unknown scalier {pscale}')
+                    raise RuntimeError(f'unknown scalier {pscale}')
+                
+
+            else:
+                if   pscale == 'lin' or pscale == 'log': bound.append(hi)
+                elif pscale == 'con'                   : bound.append(lo)  
+                else :
+                    logger.error(f'unknown scalier {pscale}')
+                    raise RuntimeError(f'unknown scalier {pscale}')
+                d[pname] = c
         return bound
     def get_lower_bounds(self,candidate, args):
         bound,d = [], {}
         for i, (c, (pname, pscale, lo, hi)) in enumerate(zip(candidate, self.param_ranges)):
             lo = __getV__(lo,d)
-            if   pscale == 'lin' or pscale == 'log': bound.append(lo)
-            elif pscale == 'con'                   : bound.append(lo)  
-            else :
-                logger.error(f'unknown scalier {pscale}')
-                raise RuntimeError(f'unknown scalier {pscale}')
-            d[pname] = c
+            if self.logscale:
+                if   pscale == 'lin':
+                    bound.append(lo)
+                    d[pname] = c
+                elif pscale == 'log':
+                    bound.append(log10(lo))
+                    d[pname] = 10.**c
+                elif pscale == 'con':
+                    bound.append(lo)  
+                    d[pname] = c
+                else :
+                    logger.error(f'unknown scalier {pscale}')
+                    raise RuntimeError(f'unknown scalier {pscale}')
+            else:
+                if   pscale == 'lin' or pscale == 'log': bound.append(lo)
+                elif pscale == 'con'                   : bound.append(lo)  
+                else :
+                    logger.error(f'unknown scalier {pscale}')
+                    raise RuntimeError(f'unknown scalier {pscale}')
+                d[pname] = c
         return bound
 
 def generator_with_resolve_strings(prm_ranges,logscale):      
@@ -280,26 +318,49 @@ def af_crossover(random, mom, dad, args):
 def af_mutation(random, candidates, args):
     bounder       = args['_ec'].bounder
     prm_ranges    = args['param_ranges']
-    adapt_mut_rt  = args.get('adaptive_mutation_rate', 0.9 )
     adapt_mut_sl  = args.get('adaptive_mutation_slope',0.06)
     mutation_rate = args.get('mutation_rate', 0.1)
+    adapt_mut_rt  = 1. - mutation_rate
+    if adapt_mut_sl < 0:adapt_mut_rt  =0.
     population    = [ p.candidate for p in args["_ec"].population ]
     aggregate     = candidates+population
     scalers       = [
         abs(array(bounder.get_upper_bounds(c,args)) - array(bounder.get_lower_bounds(c,args)) )
         for c in aggregate ]
     mutants       = []
+    #DB>>
+    mrates_db      = []
+    #<<DB
     for i, (cs,css) in enumerate(zip(candidates,scalers[:len(candidates)]) ):
         mindist  = array( [ sqrt( sum( (array(cs) - array(ts))**2/css/tss) ) for ts,tss in zip(aggregate[i+1:],scalers[i+1:]) ] )/sqrt(float(len(cs)))
         mindist  = amin(mindist)
-        mut_rate = mutation_rate + adapt_mut_rt * exp(-mindist/adapt_mut_sl)
+        if adapt_mut_sl < 0:
+            mut_rate = mutation_rate
+        else:
+            mut_rate = mutation_rate + adapt_mut_rt * exp(-mindist/adapt_mut_sl)
         mutates  = nprnd.random(len(cs)) < mut_rate
         rnds     = nprnd.random(len(cs))
         mutant   = copy.copy(cs)
+        mrates_db.append((mindist,mut_rate,mutates))
+        lowerbnd = bounder.get_lower_bounds(css,args)
+        upperbnd = bounder.get_upper_bounds(css,args)
         for i, m in enumerate(cs):
             if mutates[i]:
-                mutant[i] = bounder.lower_bound[i] + (bounder.upper_bound[i]-bounder.lower_bound[i])*rnds[i]
+                mutant[i] = lowerbnd[i] + (upperbnd[i]-lowerbnd[i])*rnds[i]
         mutants.append(mutant)
+    #DB>>
+    logging.info( " > MUTATION Rates")
+    logging.info(f"    > Basic mutaion rate                     : {mutation_rate:0.4g}")
+    logging.info(f"    > Adaptive mutaion rate                  : {adapt_mut_rt:0.4g}")
+    logging.info(f"    > Adaptive slope rate                    : {adapt_mut_sl:0.4g}")
+    logging.info( "    > [mindist, rate, points of mutation]")
+    for m in mrates_db:
+        logging.info(f"    |-> {m[0]:0.4g} : {m[1]:0.4g} : {m[2]}")
+    d = array([x for x,_,_ in mrates_db])
+    logging.info(f"    > Distances      min, mean, median, max  : {amin(d):0.4g},{mean(d):0.4g},{median(d):0.4g},{amax(d):0.4g}")
+    d = array([x for _,x,_ in mrates_db])
+    logging.info(f"    > Mutation Rates min, mean, median, max  : {amin(d):0.4g},{mean(d):0.4g},{median(d):0.4g},{amax(d):0.4g}")
+    #<<DB
     return mutants
 
             

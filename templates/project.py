@@ -30,11 +30,11 @@ if __name__ == "__main__":
     oldgversion = gversion
     with open(sys.argv[0],"r") as fd:
         for il,l in enumerate(fd.readlines()):
-            if il == 0 or l[:len("gversion")] == "gversion": continue
+            if l[:len("gversion")] == "gversion": continue
             cmd += l
     gversion = [ int(m) for m in  gversion.split(".") ]
-    gversion[1] += 1
-    gversion =f"{gversion[0]}.{gversion[1]:02d}"
+    gversion[-1] += 1
+    gversion =".".join(["{{:0{}d}}".format(i+1).format(m) for i,m in enumerate(gversion) ])
     with open(sys.argv[0],"w") as fd:
         fd.write(f"gversion = \'{gversion}\'\n\n"+cmd)
     os.system(f"git commit version.py -m \'New version {prefix}{gversion}{postfix}\'")
