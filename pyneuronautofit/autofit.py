@@ -41,7 +41,7 @@ def af_ec2mod(ecprms,param_ranges):
             raise 
     return modprms        
 
-__getV__ = lambda v,ndic:eval(v,ndic) if type(v) is str else v
+__getV__ = lambda v,ndic:ndic[v] if type(v) is str else v
 
 class af_bounder(object):
     """
@@ -49,8 +49,16 @@ class af_bounder(object):
     Callable class with bounds
     """
     def __init__(self, param_ranges = None, logscale = False ):
+        self.logger = logging.getLogger("af_bounder")
         self.__set_bounds_(param_ranges, logscale)
-    
+    def __append_dict(self,d:dict,pname:(str,list),value):
+        
+        if   type(pname) is str:
+            d[pname] = value
+        elif type(pname) is list:
+            for n in pname:
+                d[n] = value
+        return d
     def __set_bounds_(self,param_ranges = None, logscale = False ):
         self.param_ranges = param_ranges
         self.logscale = logscale
@@ -67,17 +75,21 @@ class af_bounder(object):
                         lb,hb = \
                             log10(__getV__(lo,dl)),\
                             log10(__getV__(hi,dh))
-                        dl[pname] = 10.**lb
-                        dh[pname] = 10.**hb
-                    elif pscale == 'lin' or pscale == 'con':
+                        dl = self.__append_dict(dl,pname,10.**lb)
+                        dh = self.__append_dict(dh,pname,10.**hb)
+                    elif pscale == 'lin' or pscale == 'int' :
                         lb,hb = \
                             __getV__(lo,dl),\
                             __getV__(hi,dh)
-                        dl[pname] = lb
-                        dh[pname] = hb
+                        dl = self.__append_dict(dl,pname,lb)
+                        dh = self.__append_dict(dh,pname,hb)
+                    elif pscale == 'con':
+                        lb = __getV__(lo,dl)
+                        dl = self.__append_dict(dl,pname,lb)
+                        dh = self.__append_dict(dh,pname,lb)
                     else:
-                        logging.error(f"Unknow parameter scaler {pscale}. Can support only `log`, `lin`, or `con` ")
-                        raise RuntimeError(f"Unknow parameter scaler {pscale}. Can support only `log`, `lin`, or `con` ")
+                        self.logger.error( f"Unknow parameter scaler {pscale}. Can support only `log`, `lin`, `int`, or `con` ")
+                        raise RuntimeError(f"Unknow parameter scaler {pscale}. Can support only `log`, `lin`, `int`, or `con` ")
                     self.lower_bound.append( lb )
                     self.upper_bound.append( hb )
             else:
@@ -87,8 +99,11 @@ class af_bounder(object):
                         __getV__(hi,dh)
                     self.lower_bound.append( lb )
                     self.upper_bound.append( hb )
-                    dl[pname] = lb
-                    dh[pname] = hb
+                    dl = self.__append_dict(dl,pname,lb)
+                    dh = self.__append_dict(dh,pname,hb)
+                    
+                    
+                    
 
     def __call__(self, candidate, args):
         #We can reset parameter ranges list
@@ -107,6 +122,8 @@ class af_bounder(object):
                     hi = __getV__(hi,d)
                     if   pscale == 'lin':
                         bounded_candidate[i] = max( min(c, hi), lo)
+                    elif pscale == 'int':
+                        bounded_candidate[i] = int(round( max( min(c, hi), lo) ) )
                     elif pscale == 'log':
                         bounded_candidate[i] = log10( max( min(10.**c, hi), lo) )
                     elif pscale == 'con':
@@ -115,20 +132,22 @@ class af_bounder(object):
                         logger.error('unknown scalier {}'.format(pscale))
                         raise 
                     # bounded_candidate[i] = max( min(c, hi), lo)
-                    d[pname] = bounded_candidate[i]
+                    d = self.__append_dict(d,pname,bounded_candidate[i])
             else:
                 for i, (c, (pname, pscale, lo, hi)) in enumerate(zip(candidate, self.param_ranges)):
                     lo = __getV__(lo,d)
                     hi = __getV__(hi,d)
-                    if   pscale == 'lin' or pscale == 'log':
+                    if   pscale == 'lin' or pscale == 'log': 
                         bounded_candidate[i] = max( min(c, hi), lo)
+                    elif pscale == 'int':
+                        bounded_candidate[i] = int( round( max( min(c, hi), lo) ) )
                     elif pscale == 'con':
                         bounded_candidate[i] = lo
                     else :
                         logger.error('unknown scalier {}'.format(pscale))
                         raise RuntimeError(f'unknown scalier {pscale}')
                     # bounded_candidate[i] = max( min(c, hi), lo)
-                    d[pname] = bounded_candidate[i]
+                    d = self.__append_dict(d,pname,bounded_candidate[i])
                 
             return bounded_candidate
     def get_upper_bounds(self,candidate, args):
@@ -139,50 +158,58 @@ class af_bounder(object):
             if self.logscale:
                 if   pscale == 'lin':
                     bound.append(hi)
-                    d[pname] = c
+                    d = self.__append_dict(d,pname,c)
+                elif pscale == 'int':
+                    bound.append(int( ceil(hi) ) )
+                    d = self.__append_dict(d,pname,c)
                 elif pscale == 'log':
                     bound.append(log10(hi))
-                    d[pname] = 10.**c
+                    d = self.__append_dict(d,pname,10.**c)
                 elif pscale == 'con':
                     bound.append(lo)
-                    d[pname] = c
+                    d = self.__append_dict(d,pname,c)
                 else :
                     logger.error(f'unknown scalier {pscale}')
                     raise RuntimeError(f'unknown scalier {pscale}')
                 
 
             else:
-                if   pscale == 'lin' or pscale == 'log': bound.append(hi)
-                elif pscale == 'con'                   : bound.append(lo)  
+                if   pscale == 'lin' or pscale == 'log' : bound.append(hi) 
+                elif pscale == 'int'                    : bound.append(int(ceil(hi))
+                elif pscale == 'con'                    : bound.append(lo)  
                 else :
                     logger.error(f'unknown scalier {pscale}')
                     raise RuntimeError(f'unknown scalier {pscale}')
-                d[pname] = c
+                d = self.__append_dict(d,pname,c)
         return bound
     def get_lower_bounds(self,candidate, args):
         bound,d = [], {}
         for i, (c, (pname, pscale, lo, hi)) in enumerate(zip(candidate, self.param_ranges)):
             lo = __getV__(lo,d)
             if self.logscale:
-                if   pscale == 'lin':
+                if   pscale == 'lin' or 
                     bound.append(lo)
-                    d[pname] = c
+                    d = self.__append_dict(d,pname,c)
+                elif pscale == 'int':
+                    bound.append(int( floor(lo) ) )
+                    d = self.__append_dict(d,pname,c)
                 elif pscale == 'log':
                     bound.append(log10(lo))
-                    d[pname] = 10.**c
+                    d = self.__append_dict(d,pname,10.**c)
                 elif pscale == 'con':
-                    bound.append(lo)  
-                    d[pname] = c
+                    bound.append(lo)
+                    d = self.__append_dict(d,pname,c)
                 else :
                     logger.error(f'unknown scalier {pscale}')
                     raise RuntimeError(f'unknown scalier {pscale}')
             else:
-                if   pscale == 'lin' or pscale == 'log': bound.append(lo)
-                elif pscale == 'con'                   : bound.append(lo)  
+                if   pscale == 'lin' or pscale == 'log' : bound.append(lo)
+                elif pscale == 'int'                    : bound.append(int(floor(lo)))
+                elif pscale == 'con'                    : bound.append(lo)  
                 else :
                     logger.error(f'unknown scalier {pscale}')
                     raise RuntimeError(f'unknown scalier {pscale}')
-                d[pname] = c
+                d = self.__append_dict(d,pname,c)
         return bound
 
 def generator_with_resolve_strings(prm_ranges,logscale):      
@@ -195,7 +222,16 @@ def generator_with_resolve_strings(prm_ranges,logscale):
         # print(pname,pscale,lo,hi,":",lo,hi,)
         #<<DB
         if logscale:
-            x = nprnd.uniform(lo, hi) if pscale == "lin" else (nprnd.uniform(log10(lo), log10(hi)) if pscale == 'log' else lo)
+            if   pscale == "lin":
+                x = nprnd.uniform(lo, hi) 
+            elif pscale == "lig":    
+                x = nprnd.uniform(log10(lo), log10(hi))
+            elif pscale == "int":
+                x = nprnd.randint(lo, hi) 
+            elif pscale == "con":
+                x = lo
+            else:
+                raise RuntimeError(f'Unknown scale {pscale} for parameter {pname}')
             d[pname] = 10.**x if pscale == 'log' else x
         else:
             x = lo if pscale == 'con' else nprnd.uniform(lo, hi)
@@ -285,6 +321,7 @@ def af_crossover(random, mom, dad, args):
     crossover_rate = args.setdefault('crossover_rate', 1.0)
     num_crossover_points = args.setdefault('num_crossover_points', None)
     binary2continuous_ratio = args.setdefault('binary2continuous_ratio', 0.25)
+    prm_ranges   = args['param_ranges']
     if num_crossover_points is None:
         num_crossover_points = random.randint(1,min(len(mom),len(dad))//2)
     children = []
@@ -304,9 +341,21 @@ def af_crossover(random, mom, dad, args):
                     sis[i] = d
                     #normal = not normal
         else:
-            for i, (m, d) in enumerate(zip(mom, dad)):
-                bro[i] = d + (m-d)*random.random()
-                sis[i] = d + (m-d)*random.random()
+            for i, (m, d,(_,s,_,_)) in enumerate(zip(mom, dad, prm_ranges)):
+                if s == 'int':
+                    if type(m)is not int or type(d) is not int:
+                        logging.warning(f'One of the parent has non integer value at integer location')
+                        logging.warning(f'   Mom: {m}, {type(m)}, {mom}')
+                        logging.warning(f'   Dad: {d}, {type(d)}, {dad}')
+                    if m == d:
+                        bro[i] = int(round(m))
+                        sis[i] = int(round(d))
+                    else:
+                        bro[i] = nprnd.randint(min(m,d),max(m,d))
+                        sis[i] = nprnd.randint(min(m,d),max(m,d))
+                else:
+                    bro[i] = d + (m-d)*random.random()
+                    sis[i] = d + (m-d)*random.random()
         children.append(bro)
         children.append(sis)
     else:
@@ -321,6 +370,7 @@ def af_mutation(random, candidates, args):
     adapt_mut_sl  = args.get('adaptive_mutation_slope',0.06)
     mutation_rate = args.get('mutation_rate', 0.1)
     adapt_mut_rt  = 1. - mutation_rate
+    prm_ranges    = args['param_ranges']
     if adapt_mut_sl < 0:adapt_mut_rt  =0.
     population    = [ p.candidate for p in args["_ec"].population ]
     aggregate     = candidates+population
@@ -344,9 +394,12 @@ def af_mutation(random, candidates, args):
         mrates_db.append((mindist,mut_rate,mutates))
         lowerbnd = bounder.get_lower_bounds(css,args)
         upperbnd = bounder.get_upper_bounds(css,args)
-        for i, m in enumerate(cs):
-            if mutates[i]:
-                mutant[i] = lowerbnd[i] + (upperbnd[i]-lowerbnd[i])*rnds[i]
+        for j, (m,(_,s,_,_)) in enumerate(zip(cs,prm_ranges)):
+            if mutates[j]:
+                if s == 'int':
+                    mutant[j] = nprnd.randint(lowerbnd[j],upperbnd[j])
+                else:
+                    mutant[j] = lowerbnd[j] + (upperbnd[j]-lowerbnd[j])*rnds[j]
         mutants.append(mutant)
     #DB>>
     logging.info( " > MUTATION Rates")
@@ -355,7 +408,7 @@ def af_mutation(random, candidates, args):
     logging.info(f"    > Adaptive slope rate                    : {adapt_mut_sl:0.4g}")
     logging.info( "    > [mindist, rate, points of mutation]")
     for m in mrates_db:
-        logging.info(f"    |-> {m[0]:0.4g} : {m[1]:0.4g} : {m[2]}")
+        logging.info(f"    |-> {m[0]:0.4g} : {m[1]:0.4g} : {m[2].tolist()}")
     d = array([x for x,_,_ in mrates_db])
     logging.info(f"    > Distances      min, mean, median, max  : {amin(d):0.4g},{mean(d):0.4g},{median(d):0.4g},{amax(d):0.4g}")
     d = array([x for _,x,_ in mrates_db])
