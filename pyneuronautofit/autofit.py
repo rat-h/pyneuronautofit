@@ -85,6 +85,7 @@ class af_bounder(object):
                         dh = self.__append_dict(dh,pname,hb)
                     elif pscale == 'con':
                         lb = __getV__(lo,dl)
+                        hb = lb
                         dl = self.__append_dict(dl,pname,lb)
                         dh = self.__append_dict(dh,pname,lb)
                     else:
@@ -121,11 +122,11 @@ class af_bounder(object):
                     lo = __getV__(lo,d)
                     hi = __getV__(hi,d)
                     if   pscale == 'lin':
-                        bounded_candidate[i] = max( min(c, hi), lo)
+                        bounded_candidate[i] = amax([ amin([c, hi]), lo])
                     elif pscale == 'int':
-                        bounded_candidate[i] = int(round( max( min(c, hi), lo) ) )
+                        bounded_candidate[i] = int(round( amax([ amin([c, hi]), lo]) ) )
                     elif pscale == 'log':
-                        bounded_candidate[i] = log10( max( min(10.**c, hi), lo) )
+                        bounded_candidate[i] = log10( amax([ amin([10.**c, hi]), lo]) )
                     elif pscale == 'con':
                         bounded_candidate[i] = lo
                     else :
@@ -138,9 +139,9 @@ class af_bounder(object):
                     lo = __getV__(lo,d)
                     hi = __getV__(hi,d)
                     if   pscale == 'lin' or pscale == 'log': 
-                        bounded_candidate[i] = max( min(c, hi), lo)
+                        bounded_candidate[i] = amax([ min([c, hi]), lo])
                     elif pscale == 'int':
-                        bounded_candidate[i] = int( round( max( min(c, hi), lo) ) )
+                        bounded_candidate[i] = int( round( amax([ amin([c, hi]), lo]) ) )
                     elif pscale == 'con':
                         bounded_candidate[i] = lo
                     else :
@@ -175,7 +176,7 @@ class af_bounder(object):
 
             else:
                 if   pscale == 'lin' or pscale == 'log' : bound.append(hi) 
-                elif pscale == 'int'                    : bound.append(int(ceil(hi))
+                elif pscale == 'int'                    : bound.append(int(ceil(hi)))
                 elif pscale == 'con'                    : bound.append(lo)  
                 else :
                     logger.error(f'unknown scalier {pscale}')
@@ -187,7 +188,7 @@ class af_bounder(object):
         for i, (c, (pname, pscale, lo, hi)) in enumerate(zip(candidate, self.param_ranges)):
             lo = __getV__(lo,d)
             if self.logscale:
-                if   pscale == 'lin' or 
+                if   pscale == 'lin': 
                     bound.append(lo)
                     d = self.__append_dict(d,pname,c)
                 elif pscale == 'int':
@@ -224,7 +225,7 @@ def generator_with_resolve_strings(prm_ranges,logscale):
         if logscale:
             if   pscale == "lin":
                 x = nprnd.uniform(lo, hi) 
-            elif pscale == "lig":    
+            elif pscale == "log":    
                 x = nprnd.uniform(log10(lo), log10(hi))
             elif pscale == "int":
                 x = nprnd.randint(lo, hi) 
@@ -322,14 +323,14 @@ def af_crossover(random, mom, dad, args):
     num_crossover_points = args.setdefault('num_crossover_points', None)
     binary2continuous_ratio = args.setdefault('binary2continuous_ratio', 0.25)
     prm_ranges   = args['param_ranges']
-    if num_crossover_points is None:
-        num_crossover_points = random.randint(1,min(len(mom),len(dad))//2)
+    if num_crossover_points is None and min([len(mom),len(dad)])//2 > 2:
+        num_crossover_points = random.randint(1,min([len(mom),len(dad)])//2)
     children = []
     if random.random() < crossover_rate:
         bro = copy.copy(dad)
         sis = copy.copy(mom)
-        if random.random() < binary2continuous_ratio:
-            num_cuts = min(len(mom)-1, num_crossover_points)
+        if random.random() < binary2continuous_ratio and not num_crossover_points is None:
+            num_cuts = min([len(mom)-1, num_crossover_points])
             cut_points = random.sample(range(1, len(mom)), num_cuts)
             cut_points.sort()        
             normal = True
@@ -351,11 +352,11 @@ def af_crossover(random, mom, dad, args):
                         bro[i] = int(round(m))
                         sis[i] = int(round(d))
                     else:
-                        bro[i] = nprnd.randint(min(m,d),max(m,d))
-                        sis[i] = nprnd.randint(min(m,d),max(m,d))
+                        bro[i] = nprnd.randint(min([m,d]),max([m,d]))
+                        sis[i] = nprnd.randint(min([m,d]),max([m,d]))
                 else:
-                    bro[i] = d + (m-d)*random.random()
-                    sis[i] = d + (m-d)*random.random()
+                    bro[i] = float(d + (m-d)*random.random())
+                    sis[i] = float(d + (m-d)*random.random())
         children.append(bro)
         children.append(sis)
     else:

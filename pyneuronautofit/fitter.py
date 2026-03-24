@@ -493,7 +493,7 @@ def KrayzmanGA(candidates=[], args={}):
         logging.error(f"Cannot compute masked fitness! fitness={fitness}, mask={KrayzmanGA.masking}:{e}")
         raise RuntimeError(f"Cannot compute masked fitness! fitness={fitness}, mask={KrayzmanGA.masking}:{e}")
     try:
-        if any(isnan(fitness)):
+        if any(isnan(wfitness)):
             fmax = amax(wfitness[~isnan(wfitness)])
             with loglock:
                 logging.info("Fitness is nan. Skip adjustment")
