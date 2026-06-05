@@ -14,15 +14,15 @@ class Evaluator():
             A - average spike shape during stimulus            
             C - distance between voltages during stimulus
             D - distance between voltages during after stimulus tails
-            S - spike shapes during stimulus
-            T - spike times
-            R - resting potential
             L - post-stimulus tail statistics
             M - voltage stimulus statistics
             N - number of spikes
             O - Just total number of spikes
             P - difference in probability dencity on v,dv/dt plane weighted by 1 - target_dencity/sum(target_dencity)
             Q - the same as P but only during stimulus.  
+            R - resting potential
+            S - spike shapes during stimulus
+            T - spike times
             U - squared error of subthreshold voltage
             V - distance between voltages
             W - spike width during stimulus
@@ -78,72 +78,52 @@ class Evaluator():
             if m[-1] in mright:mright[m[-1]] += 1
             else : mright[m[-1]] = 1
         self.stimLidx,self.stimRidx =\
-            sorted([ [mleft[m] ,m] for m in mleft ])[-1][1],\
-            sorted([ [mright[m],m] for m in mright])[-1][1]
+            sorted([ m for m in mleft ],key=lambda m:mleft[m] )[-1],\
+            sorted([ m for m in mright],key=lambda m:mright[m])[-1]
         self.stimLidx,self.stimRidx = int(self.stimLidx),int(self.stimRidx)
         self.stimLtime,self.stimRtime = self.stimLidx*dt, self.stimRidx*dt
 
 
     def getspikeidx(self, rec:ndarray):
-        idx = where(rec > self.spikethreshold)[0]
+        idx, = where(rec > self.spikethreshold)
         if len(idx) == 0: return [],[]
         idu = [ idx[0] ] + [ x2 for x1,x2 in zip(idx[:-1],idx[1:]) if x2 > x1+1 ]
         idd = [ x1 for x1,x2 in zip(idx[:-1],idx[1:]) if x2 > x1+1 ] + [ idx[-1] ]
         return idu,idd        
     
-    def _cmam(self,mod,io): #check mode and mask
+    def _cmam(self,mod,io,mask:(dict,None)=None): #check mode and mask
         if not mod in self.mode: return False
-        if self.mask is None: return True
-        if type(self.mask) is int:
-            return io <= self.mask
-        if type(self.mask) is tuple:
-            if len(self.mask) == 2: return self.mask[0] <= io <= self.mask[1]
-            logging.error(f"Mask in tuple should have len 2, got {len(self.mask)}")
-            raise BaseException(f"Mask in tuple should have len 2, got {len(self.mask)}")
-        if type(self.mask) is list:
-            return io in self.mask
-        if type(self.mask) is dict:
-            if not mod in self.mask: return True
-            if self.mask[mod] is None: return True
-            if type(self.mask[mod]) is int:
-                return io <= self.mask[mod]
-            if type(self.mask[mod]) is tuple:
-                if len(self.mask[mod]) == 2: return  self.mask[mod][0] <= io <= self.mask[mod][1]
-                logging.error(f"Mask in mode {mod} is tuple should have len 2, got {len(self.mask[mod])}")
-                raise BaseException(f"Mask in mode {mod} is tuple should have len 2, got {len(self.mask[mod])}")
-            if type(self.mask[mod]) is list:
-                return io in self.mask[mod]
-            logging.error(f"Unknown mask type {type(self.mask[mod])} for mode {mod}")
-            raise BaseException(f"Unknown mask type {type(self.mask[mod])} for mode {mod}")
+        if mask is None:
+            mask = self.mask
+        if mask is None: return True
+        if   type(mask) is int:
+            return io <= mask
+        elif type(mask) is tuple:
+            if len(mask) == 2: return mask[0] <= io <= mask[1]
+            logging.error(f"Mask in tuple should have len 2, got {len(mask)}")
+            raise BaseException(f"Mask in tuple should have len 2, got {len(mask)}")
+        elif type(mask) is list:
+            return io in mask
+        elif type(mask) is dict:
+            if not mod in mask: return True
+            if mask[mod] is None: return True
+            return self._cmam(mod,io,self.mask[mod])
         #DB>>
         print(self.mask,mod)
         #<<DB
-        logging.error(f"Unknown mask type {type(self.mask[mod])}")
-        raise BaseException(f"Unknown mask type {type(self.mask[mod])}")
+        logging.error(f"Unknown mask type {type(mask)} for mode {mod}: {mask}")
+        raise BaseException(f"Unknown mask type {type(mask)} for mode {mod}: {mask}")
         
     
-    def assess(self,obsdata:list)->list:
+    def assess(self,obsdata:list)->list:        
         rend = {}
-        if 'S' in self.mode: rend['S'] = []
-        if 'T' in self.mode: rend['T'] = []
-        if 'W' in self.mode: rend['W'] = []
-        if 'U' in self.mode: rend['U'] = []
-        if 'R' in self.mode: rend['R'] = None
-        if 'L' in self.mode: rend['L'] = []
-        if 'M' in self.mode: rend['M'] = []
         if 'A' in self.mode: rend['A'] = []
-        if 'N' in self.mode: rend['N'] = []
         if 'C' in self.mode: rend['C'] = []
         if 'D' in self.mode: rend['D'] = []
-        if 'V' in self.mode: rend['V'] = []
+        if 'L' in self.mode: rend['L'] = []
+        if 'M' in self.mode: rend['M'] = []
+        if 'N' in self.mode: rend['N'] = []
         if 'O' in self.mode: rend['O'] = []
-        if 'Z' in self.mode:
-           rend['Z'] = []
-           if self.spikezoomers is None:
-                self.spikezoomers = []
-                setzoomers        = True
-           else:
-                setzoomers        = False
         if 'P' in self.mode:
             rend['P'] = []
             if self.vpvPxyw is None:
@@ -158,11 +138,20 @@ class Evaluator():
                 setQvpv           = True
             else:
                 setQvpv           = False
+        if 'R' in self.mode: rend['R'] = None
+        if 'S' in self.mode: rend['S'] = []
+        if 'T' in self.mode: rend['T'] = []
+        if 'U' in self.mode: rend['U'] = []
+        if 'V' in self.mode: rend['V'] = []
+        if 'W' in self.mode: rend['W'] = []
+        if 'Z' in self.mode:
+           rend['Z'] = []
+           if self.spikezoomers is None:
+                self.spikezoomers = []
+                setzoomers        = True
+           else:
+                setzoomers        = False
         for io,o in enumerate(obsdata):
-            # if 'S' in self.mode: rend['S'].append([])
-            # if 'T' in self.mode: rend['T'].append([])
-            # if 'W' in self.mode: rend['W'].append([])
-            # if 'U' in self.mode: rend['U'].append( copy(o) )
             for n in 'S T W'.split():
                 if self._cmam(n,io): rend[n].append([])
             if self._cmam('U',io): rend['U'].append( copy(o) )
