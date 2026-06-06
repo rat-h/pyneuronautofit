@@ -105,6 +105,7 @@ class RunAndTest():
             if init is not None:
                 for var in init:
                     self.__nrn_SetPrm__(n,var,init[var ])
+            n.setcable()
             
             pop[nid].setcable()
             ic.amp = self.eval.TestCurr[nid][0]*1e-3
@@ -272,6 +273,7 @@ def ReadArXive(fname,selection):
             exit(1)
         logging.info(f"Selection = {selection}")
         collections = [ collections[i] for i in selection]
+        logging.info(f"Collection= {collections}")
     logging.info( "==================== DONE")
     
     return collections,markers,bvalues,parameters,\
@@ -560,7 +562,9 @@ if __name__ == '__main__':
         # show()
         
     else:
-        ev  = RunAndTest(evaluator,celsius=opt.celsius,dt=opt.simdt).__run__(params=prms)
-        print(ev.vector())
+        rat  = RunAndTest(evaluator,celsius=opt.celsius,dt=opt.simdt)
+        for _,prms in collections:
+            ev   = rat(params=prms)
+            print(ev)
         
         
