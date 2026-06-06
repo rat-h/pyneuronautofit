@@ -7,25 +7,27 @@ class Evaluator():
     def __init__(self, inputfile:(str,None), mode:str="RALMN", mask:(dict,list,tuple,int,None)=None,\
                        prespike:int=10, postspike:int=20, spikethreshold:float=0., spikecount:(int,None)=-1,\
                        spikeweight:(float,None)=None, downsampler=None,\
-                       vpvsize:int=5,\
+                       vpvsize:int=5, smoothingkernel:float=20.,\
                        pedant:bool=True, collapse_tests:bool=False, savetruedata:bool=False):
         """
         mode: (str)
             A - average spike shape during stimulus            
             C - distance between voltages during stimulus
             D - distance between voltages during after stimulus tails
+            F - difference in FI curve
             L - post-stimulus tail statistics
             M - voltage stimulus statistics
             N - number of spikes
             O - Just total number of spikes
-            P - difference in probability dencity on v,dv/dt plane weighted by 1 - target_dencity/sum(target_dencity)
+            P - difference in probability density on v,dv/dt plane weighted by 1 - target_dencity/sum(target_dencity)
             Q - the same as P but only during stimulus.  
             R - resting potential
             S - spike shapes during stimulus
             T - spike times
-            U - squared error of subthreshold voltage
+            U - squared error of voltage (somewhat duplication of V)
             V - distance between voltages
             W - spike width during stimulus
+            X - squared error of smoothed voltage
             Z - distance between voltages with zooming weight on spikes
         mask:
             if (int):
@@ -54,6 +56,7 @@ class Evaluator():
         self.vpvsize        = vpvsize
         self.vpvPxyw        = None
         self.vpvQxyw        = None
+        self.smoothingkernel= smoothingkernel 
         
         
         if not inputfile is None:
@@ -124,6 +127,7 @@ class Evaluator():
         if 'M' in self.mode: rend['M'] = []
         if 'N' in self.mode: rend['N'] = []
         if 'O' in self.mode: rend['O'] = []
+        if 'F' in self.mode: rend['F'] = []
         if 'P' in self.mode:
             rend['P'] = []
             if self.vpvPxyw is None:
@@ -144,6 +148,15 @@ class Evaluator():
         if 'U' in self.mode: rend['U'] = []
         if 'V' in self.mode: rend['V'] = []
         if 'W' in self.mode: rend['W'] = []
+        if 'X' in self.mode:
+            rend['X']   = []
+            ndx         = int( ceil( self.smoothingkernel/self.expdt ) )
+            kernel      = linspace(-ndx,ndx,ndx+1)*self.expdt
+            idx,        = where( logical_and(kernel>=-self.smoothingkernel/2,kernel<=self.smoothingkernel/2) )
+            kernel      = zeros(kernel.shape[0])
+            kernel[idx] = 1
+            kernel      = kernel/sum(kernel)
+            
         if 'Z' in self.mode:
            rend['Z'] = []
            if self.spikezoomers is None:
@@ -156,11 +169,17 @@ class Evaluator():
                 if self._cmam(n,io): rend[n].append([])
             if self._cmam('U',io): rend['U'].append( copy(o) )
             if self._cmam('V',io): rend['V'].append( copy(o) )
+            if self._cmam('X',io): rend['X'].append( convolve(o,kernel,mode='same') )
             
             if self._cmam('R',io):
                 rend['R'] = o[:self.stimLidx] if rend['R'] is None else concatenate((rend['R'],o[:self.stimLidx]))
 
             spkidx = self.getspikeidx(o)
+            if self._cmam('F',io):
+                idu,idd = spkidx
+                T = (self.stimRtime - self.stimLtime)/1000 # in seconds
+                F = len(idu)/T
+                rend['F'].append(F)
             if self._cmam('Z',io):
                 rend['Z'].append( copy(o) )
                 if setzoomers:
@@ -367,6 +386,7 @@ class Evaluator():
             if self.tmax < TrueData[-1].shape[0]*self.expdt:
                 self.tmax = TrueData[-1].shape[0]*self.expdt
         self._detect_stims(self.TestCurr,self.expdt)
+        self.meancur = [ float( mean(c[self.stimLidx:self.stimRidx]) ) for c in self.TestCurr ]
         self.Nrec = len(TrueData)
         self.cond = self.assess(TrueData)
         if self.savetruedata: self.TrueData = TrueData
@@ -391,6 +411,8 @@ class Evaluator():
             self.stimRidx       = npx["stimRidx"]
             self.stimLtime      = npx["stimLtime"]
             self.stimRtime      = npx["stimRtime"]
+            self.meancur        = npx["mean_current"]
+            self.smoothingkernel= npx['smoothingkernel']
             self.spikeweight    = npx["spikeweight"]
             self.spikezoomers   = npx["spikezoomers"]
             self.vpvsize        = npx["vpvsize"]
@@ -419,11 +441,13 @@ class Evaluator():
             stimRidx        = self.stimRidx,
             stimLtime       = self.stimLtime,
             stimRtime       = self.stimRtime,
-            spikeweight    =  self.spikeweight,
-            spikezoomers   =  self.spikezoomers,
-            vpvsize        =  self.vpvsize,
-            vpvPxyw        =  self.vpvPxyw,
-            vpvQxyw        =  self.vpvQxyw,
+            mean_current    = self.meancur,
+            smoothingkernel = self.smoothingkernel,
+            spikeweight     =  self.spikeweight,
+            spikezoomers    =  self.spikezoomers,
+            vpvsize         =  self.vpvsize,
+            vpvPxyw         =  self.vpvPxyw,
+            vpvQxyw         =  self.vpvQxyw,
             cond            = self.cond,
             currents        = self.TestCurr
         )
@@ -454,22 +478,14 @@ class Evaluator():
             if not type(rend['cond'][n]) is t:
                 logging.error(f"{n} has a wrong type in condition {i}: have {type(rend['cond'][n])} but should be {t}")
                 raise  TypeError(f"{n} has a wrong type in condition {i}: have {type(rend['cond'][n])} but should be {t}")
-
-        if 'U' in rend['mode']:
-            rend['U'] = [ array(o)             for o in rend['U'] ]
-        if 'V' in rend['mode']:
-            rend['V'] = [ array(o)             for o in rend['V'] ]
+        for n in 'U V A C D X'.split():
+            if n in rend['mode']:
+                rend[n] = [ array(o)             for o in rend[n] ]
         if 'S' in rend['mode']:
             rend['S']= [ [array(p) for p in o] for o in rend['S'] ]
-        if 'A' in rend['mode']:
-            rend['A']= [ array(o)              for o in rend['A'] ]
         for n in 'R L M N O'.split():
             if n in rend['mode']:
                 rend['cond'][n] = array(rend['cond'][n])
-        if 'C' in rend['mode']:
-            rend['C']= [ array(o)             for o in rend['C'] ]
-        if 'D' in rend['mode']:
-            rend['D']= [ array(o)             for o in rend['D'] ]
 
         self.mode           = rend['mode']
         self.mask           = rend['mask']
@@ -484,6 +500,8 @@ class Evaluator():
         self.tmax           = rend['tmax']
         self.stimLidx       = rend['stimLidx']
         self.stimRidx       = rend['stimRidx']
+        self.meancur        = rend['mean_current']
+        self.smoothingkernel= rend['smoothingkernel']
         self.stimLtime      = rend['stimLtime']
         self.stimRtime      = rend['stimRtime']
         self.cond           = rend['cond']
@@ -509,6 +527,8 @@ class Evaluator():
             'tmax'           : self.tmax,
             'stimLidx'       : self.stimLidx,
             'stimRidx'       : self.stimRidx,
+            'mean_current'   : self.meancur,
+            'smoothingkernel': self.smoothingkernel,
             'stimLtime'      : self.stimLtime,
             'stimRtime'      : self.stimRtime,
             'cond'           : {},
@@ -516,27 +536,17 @@ class Evaluator():
                 c.tolist() for c in self.TestCurr
             ]
         }
-        if 'U' in self.mode:
-            rend['cond']['U'] = [ o.tolist() for o in self.cond['U'] ]
-        if 'V' in self.mode:
-            rend['cond']['V'] = [ o.tolist() for o in self.cond['V'] ]
+        for n in 'U V A X C D'.split():
+            if n in self.mode:
+                rend['cond'][n] = [ o.tolist() for o in self.cond[n] ]
         if 'S' in self.mode:
             rend['cond']['S'] = [ [ p.tolist() for p in o] for o in self.cond['S'] ]
-        if 'A' in self.mode:
-            rend['cond']['A'] = [ o.tolist() for o in self.cond['A'] ]
-        if 'T' in self.mode:
-            rend['cond']['T'] = self.cond['T']
-        if 'W' in self.mode:
-            rend['cond']['W'] = self.cond['W']
-
+        for n in 'T W F'.split():
+            if n in self.mode:
+                rend['cond'][n] = self.cond[n]
         for n in 'R L M A N O'.split():
             if n in self.mode:
                 rend['cond'][n] = self.cond[n].tolist()
-
-        if 'C' in self.mode:
-            rend['cond']['C']   = [ o.tolist() for o in self.cond['C'] ]
-        if 'D' in self.mode:
-            rend['cond']['D']   = [ o.tolist() for o in self.cond['D'] ]
 
         with open(filename,"w") as fd:
             json.dump(rend,fd)
@@ -559,8 +569,10 @@ class Evaluator():
         n.stimRidx       =  self.stimRidx
         n.stimLtime      =  self.stimLtime
         n.stimRtime      =  self.stimRtime
+        n.meancur        =  self.meancur
         n.spikeweight    =  self.spikeweight
         n.spikezoomers   =  self.spikezoomers
+        n.smoothingkernel=  self.smoothingkernel
         n.vpvsize        =  self.vpvsize
         n.vpvPxyw        =  self.vpvPxyw
         n.vpvQxyw        =  self.vpvQxyw
@@ -579,17 +591,16 @@ class Evaluator():
                     vec +=  [ o.tolist() for o in self.cond[n] ]
         if 'S' in self.mode:
             vec +=  [ [ p.tolist() for p in o] for o in self.cond['S'] ]
-        if 'T' in self.mode:
-            vec +=  self.cond['T']
-        if 'W' in self.mode:
-            vec +=  self.cond['W']
+        for n in 'T W F'.split():            
+            if n in self.mode:
+                vec +=  self.cond[n]
         return vec
 
     
     def scores(self,marks=False)->list:
         clone0 = self.clone(None)
         clone0.cond = {}
-        for n in 'U V Z C D A'.split():
+        for n in 'U V Z C D A X'.split():
             if n in self.mode:
                 clone0.cond[n] =  [ zeros(o.shape) for o in self.cond[n] ]
         
@@ -622,6 +633,8 @@ class Evaluator():
             clone0.cond['T'] =  [ [ 0. for p in x ] for x in   self.cond['T'] ]
         if 'W' in self.mode:
             clone0.cond['W'] =  [ [ 0. for p in x ] for x in   self.cond['W'] ]
+        if 'F' in self.mode:
+            clone0.cond['F'] =  [ 0 for o in self.cond['F'] ]
 
         for n in 'R L M N O'.split():
             if n in self.mode:
@@ -636,7 +649,7 @@ class Evaluator():
                 raise RuntimeError("Numbers of conditions are different")
             return self.Nrec
         else:
-            return min(self.Nrec,oo.Nrec)
+            return min([self.Nrec,oo.Nrec])
     
     def _num_spikes_(self,oo,spsh1, spsh2)->int:
         if self.pedant:
@@ -778,8 +791,8 @@ class Evaluator():
         for stvl1,stvl2 in zip(self.cond['C'],oo.cond['C']):
             if stvl1.shape != stvl2.shape:
                 logging.error(f"Active voltage shapes are different{stvl1.shape} != {stvl2.shape}")
-                if stvl1.shape[0] > stvl2.shape[0]:stvl1.shape =stvl1.shape[:stvl2.shape]
-                else                              :stvl2.shape =stvl2.shape[:stvl1.shape]
+                if stvl1.shape[0] > stvl2.shape[0]:stvl1 = stvl1[:stvl2.shape]
+                else                              :stvl2 = stvl2[:stvl1.shape]
             stvldiff = (stvl1-stvl2)**2
             if self.collapse:
                 rend .append( (sum(stvldiff),stvldiff.shape[0]))
@@ -845,11 +858,35 @@ class Evaluator():
             raise RuntimeError("Numbers of Z-conditions are different:{} vs {}\n\n".format(len(self.cond['Z']), len(oo.cond['Z'])))
         rend = []
         for vl1,vl2,w in zip(self.cond['Z'],oo.cond['Z'],self.spikezoomers):
-            m = min(vl1.shape[0],vl2.shape[0])
+            m = min([ vl1.shape[0],vl2.shape[0] ])
             rend.append(sum(abs(vl1[:m]-vl2[:m])*w[:m])/sum(w[:m]))
         if self.collapse:
             return mean( array(rend) )
         return rend
+    def FIcurves_error(self,oo)->float:
+        if self.cond is None or oo.cond is None:
+            logging.error(f"One of the conditions is None: {self.cond} vs {oo.cond}")
+            raise RuntimeError(f"One of the conditions is None: {self.cond} vs {oo.cond}")
+        if len(self.cond['F']) != len(oo.cond['F']):
+            logging.error("Numbers of F-conditions are different:{} vs {}\n\n".format(len(self.cond['F']), len(oo.cond['F'])))
+            raise RuntimeError("Numbers of F-conditions are different:{} vs {}\n\n".format(len(self.cond['F']), len(oo.cond['F'])))
+        diff = []
+        for fi1,fi2 in zip(self.cond['F'],oo.cond['F']):
+            diff.append(abs(fi1-fi2))
+        diff = float( sum(diff) )
+        return diff
+    def smoothed_v_error(self,oo)->float:
+        if self.cond is None or oo.cond is None:
+            logging.error(f"One of the conditions is None: {self.cond} vs {oo.cond}")
+            raise RuntimeError(f"One of the conditions is None: {self.cond} vs {oo.cond}")
+        if len(self.cond['X']) != len(oo.cond['X']):
+            logging.error("Numbers of X-conditions are different:{} vs {}\n\n".format(len(self.cond['X']), len(oo.cond['X'])))
+            raise RuntimeError("Numbers of X-conditions are different:{} vs {}\n\n".format(len(self.cond['X']), len(oo.cond['X'])))
+        diff = []
+        for vl1,vl2 in zip(self.cond['X'], oo.cond['X']):
+            m = min([vl1.shape[0],vl2.shape[0]])
+            diff.append( float( sum((vl1[:m]-vl2[:m])**2)/m ) )
+        return diff
     def vpv_total_error(self,oo)->list:
         if self.cond is None or oo.cond is None:
             return [ None for i in range(self.Nrec) if self._cmam('P',i)]
@@ -907,43 +944,52 @@ class Evaluator():
         z = self.zoomedspike_error(oo)  if "Z" in self.mode else []
         p = self.vpv_total_error(oo)    if "P" in self.mode else []
         q = self.vpv_stimulus_error(oo) if "Q" in self.mode else []
+        f = [ self.FIcurves_error(oo) ] if "F" in self.mode else []
+        x = self.smoothed_v_error(oo)   if "X" in self.mode else []
+        #DB>>
+        # print(x)
+        #<<DB
         rend = []
         if nummark:
             for _ in self.mode:
-                if _ == "U": rend += [ [f'U{i:02d}',x] for i,x in enumerate(u) ] if marks else u
-                if _ == "T": rend += [ [f'T{i:02d}',x] for i,x in enumerate(t) ] if marks else t
-                if _ == "S": rend += [ [f'S{i:02d}',x] for i,x in enumerate(s) ] if marks else s
-                if _ == "W": rend += [ [f'W{i:02d}',x] for i,x in enumerate(w) ] if marks else w
-                if _ == "R": rend += [ [f'R{i:02d}',x] for i,x in enumerate(r) ] if marks else r
-                if _ == "L": rend += [ [f'L{i:02d}',x] for i,x in enumerate(l) ] if marks else l
-                if _ == "M": rend += [ [f'M{i:02d}',x] for i,x in enumerate(m) ] if marks else m
-                if _ == "A": rend += [ [f'A{i:02d}',x] for i,x in enumerate(a) ] if marks else a
-                if _ == "N": rend += [ [f'N{i:02d}',x] for i,x in enumerate(n) ] if marks else n
-                if _ == "C": rend += [ [f'C{i:02d}',x] for i,x in enumerate(c) ] if marks else c
-                if _ == "D": rend += [ [f'D{i:02d}',x] for i,x in enumerate(d) ] if marks else d
-                if _ == "V": rend += [ [f'V{i:02d}',x] for i,x in enumerate(v) ] if marks else v
-                if _ == "O": rend += [ [f'O{i:02d}',x] for i,x in enumerate(o) ] if marks else o
-                if _ == "Z": rend += [ [f'Z{i:02d}',x] for i,x in enumerate(z) ] if marks else z
-                if _ == "P": rend += [ [f'P{i:02d}',x] for i,x in enumerate(p) ] if marks else p
-                if _ == "Q": rend += [ [f'Q{i:02d}',x] for i,x in enumerate(q) ] if marks else q
+                if _ == "U": rend += [ [f'U{i:02d}',_x_] for i,_x_ in enumerate(u) ] if marks else u
+                if _ == "T": rend += [ [f'T{i:02d}',_x_] for i,_x_ in enumerate(t) ] if marks else t
+                if _ == "S": rend += [ [f'S{i:02d}',_x_] for i,_x_ in enumerate(s) ] if marks else s
+                if _ == "W": rend += [ [f'W{i:02d}',_x_] for i,_x_ in enumerate(w) ] if marks else w
+                if _ == "R": rend += [ [f'R{i:02d}',_x_] for i,_x_ in enumerate(r) ] if marks else r
+                if _ == "L": rend += [ [f'L{i:02d}',_x_] for i,_x_ in enumerate(l) ] if marks else l
+                if _ == "M": rend += [ [f'M{i:02d}',_x_] for i,_x_ in enumerate(m) ] if marks else m
+                if _ == "A": rend += [ [f'A{i:02d}',_x_] for i,_x_ in enumerate(a) ] if marks else a
+                if _ == "N": rend += [ [f'N{i:02d}',_x_] for i,_x_ in enumerate(n) ] if marks else n
+                if _ == "C": rend += [ [f'C{i:02d}',_x_] for i,_x_ in enumerate(c) ] if marks else c
+                if _ == "D": rend += [ [f'D{i:02d}',_x_] for i,_x_ in enumerate(d) ] if marks else d
+                if _ == "V": rend += [ [f'V{i:02d}',_x_] for i,_x_ in enumerate(v) ] if marks else v
+                if _ == "O": rend += [ [f'O{i:02d}',_x_] for i,_x_ in enumerate(o) ] if marks else o
+                if _ == "Z": rend += [ [f'Z{i:02d}',_x_] for i,_x_ in enumerate(z) ] if marks else z
+                if _ == "P": rend += [ [f'P{i:02d}',_x_] for i,_x_ in enumerate(p) ] if marks else p
+                if _ == "Q": rend += [ [f'Q{i:02d}',_x_] for i,_x_ in enumerate(q) ] if marks else q
+                if _ == "F": rend += [ [f'F{i:02d}',_x_] for i,_x_ in enumerate(f) ] if marks else f
+                if _ == "X": rend += [ [f'F{i:02d}',_x_] for i,_x_ in enumerate(x) ] if marks else x
         else:
             for _ in self.mode:
-                if _ == "U": rend += [ [f'U',x] for x in u ] if marks else u
-                if _ == "T": rend += [ [f'T',x] for x in t ] if marks else t
-                if _ == "S": rend += [ [f'S',x] for x in s ] if marks else s
-                if _ == "W": rend += [ [f'W',x] for x in w ] if marks else w
-                if _ == "R": rend += [ [f'R',x] for x in r ] if marks else r
-                if _ == "L": rend += [ [f'L',x] for x in l ] if marks else l
-                if _ == "M": rend += [ [f'M',x] for x in m ] if marks else m
-                if _ == "A": rend += [ [f'A',x] for x in a ] if marks else a
-                if _ == "N": rend += [ [f'N',x] for x in n ] if marks else n
-                if _ == "C": rend += [ [f'C',x] for x in c ] if marks else c
-                if _ == "D": rend += [ [f'D',x] for x in d ] if marks else d
-                if _ == "V": rend += [ [f'V',x] for x in v ] if marks else v
-                if _ == "O": rend += [ [f'O',x] for x in o ] if marks else o
-                if _ == "Z": rend += [ [f'Z',x] for x in z ] if marks else z
-                if _ == "P": rend += [ [f'P',x] for x in p ] if marks else p
-                if _ == "Q": rend += [ [f'Q',x] for x in q ] if marks else q
+                if _ == "U": rend += [ [f'U',_x_] for _x_ in u ] if marks else u
+                if _ == "T": rend += [ [f'T',_x_] for _x_ in t ] if marks else t
+                if _ == "S": rend += [ [f'S',_x_] for _x_ in s ] if marks else s
+                if _ == "W": rend += [ [f'W',_x_] for _x_ in w ] if marks else w
+                if _ == "R": rend += [ [f'R',_x_] for _x_ in r ] if marks else r
+                if _ == "L": rend += [ [f'L',_x_] for _x_ in l ] if marks else l
+                if _ == "M": rend += [ [f'M',_x_] for _x_ in m ] if marks else m
+                if _ == "A": rend += [ [f'A',_x_] for _x_ in a ] if marks else a
+                if _ == "N": rend += [ [f'N',_x_] for _x_ in n ] if marks else n
+                if _ == "C": rend += [ [f'C',_x_] for _x_ in c ] if marks else c
+                if _ == "D": rend += [ [f'D',_x_] for _x_ in d ] if marks else d
+                if _ == "V": rend += [ [f'V',_x_] for _x_ in v ] if marks else v
+                if _ == "O": rend += [ [f'O',_x_] for _x_ in o ] if marks else o
+                if _ == "Z": rend += [ [f'Z',_x_] for _x_ in z ] if marks else z
+                if _ == "P": rend += [ [f'P',_x_] for _x_ in p ] if marks else p
+                if _ == "Q": rend += [ [f'Q',_x_] for _x_ in q ] if marks else q
+                if _ == "F": rend += [ [f'F',_x_] for _x_ in f ] if marks else f
+                if _ == "X": rend += [ [f'X',_x_] for _x_ in x ] if marks else x
             
         #DB>>
         # print(f"DB>> u={len(u)}, t={len(t)}, s={len(s)}, w={len(w)}")
@@ -974,4 +1020,6 @@ class Evaluator():
             if 'Z'  == _: ret += [ 'Z' for i in range(self.Nrec) if self._cmam('Z',i) ]
             if 'P'  == _: ret += [ 'P' for i in range(self.Nrec) if self._cmam('P',i) ]
             if 'Q'  == _: ret += [ 'Q' for i in range(self.Nrec) if self._cmam('Q',i) ]
+            if 'F'  == _: ret += [ 'F' ]
+            if 'X'  == _: ret += [ 'X' for i in range(self.Nrec) if self._cmam('X',i) ]
         return "".join(ret)
