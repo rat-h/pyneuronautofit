@@ -77,6 +77,9 @@ Model_Cond.add_option("-z", "--spike-Zoom",         dest="spwtgh",  default=None
     help="if positive absolute weight of voltage diff during spike; if negative relataed scaler")
 Model_Cond.add_option("-e", "--collapse-diff",      dest="cdiff",   default=False,           action="store_true",
     help="Collapse difference between a model and data in a vector with size = number of tests (i.e. for  -m RAMNT the diff vector will be length 5)")
+Model_Cond.add_option("-u", "--smoofing-kernel",    dest="smoothkr",default=35.,             type='float',
+    help="size of smoothing kernel in ms (default 20)")
+
 oprs.add_option_group(Model_Cond)    
 
 #RUN
@@ -195,7 +198,8 @@ logging.info( '---------------------------------------------------')
 e = Evaluator(args[0],mode = opt.emode,mask = opt.emask,prespike = opt.eleft,\
         postspike = opt.erght,spikethreshold = opt.ethsh,spikecount = opt.espc,\
         collapse_tests = opt.cdiff,vpvsize=opt.vpvsize,\
-        spikeweight=opt.spwtgh, downsampler = downsampler )
+        spikeweight=opt.spwtgh, smoothingkernel=opt.smoothkr,\
+        downsampler = downsampler )
 vl = e.diff(e,marks=True)
 vm = "".join([m for m,v in vl])
 vv = e.scores()
