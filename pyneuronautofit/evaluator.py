@@ -344,25 +344,26 @@ class Evaluator():
         logging.debug(f"   > Spike cnt = {self.spikecount}")
         logging.debug(f"   > dt        = {self.expdt} ms")
         logging.debug(f"   > tmax      = {self.tmax} ms")
-        logging.debug(f"   > Data stat = [")
-        for i in range(self.Nrec):
-            logging.debug(f"     > {i:02d} = [")
-            if self._cmam('U',i):
-                x = self.cond['U'][self._gmi('U',i)]
-                logging.debug(f"       > slike less v = {x}")
-            if self._cmam('S',i):
-                logging.debug(f"       > slike shapes = [")
-                for k,s in enumerate(self.cond['S'][self._gmi('S',i)]):
-                    logging.debug(f"          > {k:02d} = {s}")
-                logging.debug(f"         ]")
-            if self._cmam('T',i):
-                x = self.cond['T'][self._gmi('T',i)]
-                logging.debug(f"       > spike times = {x}")
-            if self._cmam('W',i):
-                x = self.cond['W'][self._gmi('W',i)]
-                logging.debug(f"       > spike width = {x}")
-            logging.debug(f"       ]")
-        logging.debug(f"     ]")    
+        if any([ x in self.mode for x in list('USTW')]):
+            logging.debug(f"   > Data stat = [")
+            for i in range(self.Nrec):
+                logging.debug(f"     > {i:02d} = [")
+                if self._cmam('U',i):
+                    x = self.cond['U'][self._gmi('U',i)]
+                    logging.debug(f"       > slike less v = {x}")
+                if self._cmam('S',i):
+                    logging.debug(f"       > slike shapes = [")
+                    for k,s in enumerate(self.cond['S'][self._gmi('S',i)]):
+                        logging.debug(f"          > {k:02d} = {s}")
+                    logging.debug(f"         ]")
+                if self._cmam('T',i):
+                    x = self.cond['T'][self._gmi('T',i)]
+                    logging.debug(f"       > spike times = {x}")
+                if self._cmam('W',i):
+                    x = self.cond['W'][self._gmi('W',i)]
+                    logging.debug(f"       > spike width = {x}")
+                logging.debug(f"       ]")
+            logging.debug(f"     ]")    
             
     
     def readABF(self,abf:str):
