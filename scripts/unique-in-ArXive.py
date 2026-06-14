@@ -25,7 +25,7 @@ oprs.add_option("-r", "--road-map",         dest="rmap",  default=None,         
 
 opt, args = oprs.parse_args()
 
-if len(args) != 1:
+if len(args) < 1:
     print(f"USAGE {sys.argv[0]} [flags] input.json[.gzip] ouput.json")
     print(f"Run {sys.argv[0]} -h for more options")
     exit(1)
