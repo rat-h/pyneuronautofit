@@ -249,72 +249,82 @@ def af_generator(random, args):
     prm_ranges   = args['param_ranges']
     logscale     = args.get("logscale",False)
     init_pop     = args.get("init_pop",None)
-    if not init_pop is None and type(init_pop) is str:# 
-        if os.path.isfile(init_pop):
-            if not hasattr(af_generator,"counter"):
-                af_generator.counter = 0
-                logging.info("READING FROM INIT POPULATION")
-                logging.info(f" > file                             : {init_pop}")
-            fname, fext = os.path.splitext(init_pop)
-            if   fext == ".gz":
-                fname, fext = os.path.splitext(fname)
-                if fext == ".json":
-                    logging.info(f"Reading GZIP {init_pop}")
-                    with gzip.open(init_pop,'r') as fd:
+    if init_pop is None or not type(init_pop) is str:
+        logging.debug(f"init_pop={init_pop}({type(init_pop)}) is None or not a string")
+        return  generator_with_resolve_strings(prm_ranges,logscale)
+    else:
+        if not hasattr(af_generator, 'arx'):
+            if os.path.isfile(init_pop):
+                if not hasattr(af_generator,"counter"):
+                    af_generator.counter = 0
+                    logging.info("READING FROM INIT POPULATION")
+                    logging.info(f" > file                             : {init_pop}")
+                fname, fext = os.path.splitext(init_pop)
+                if   fext == ".gz":
+                    fname, fext = os.path.splitext(fname)
+                    if fext == ".json":
+                        logging.info(f"Reading GZIP {init_pop}")
+                        with gzip.open(init_pop,'r') as fd:
+                            try:
+                                af_generator.arx = json.load(fd)
+                            except BaseException as e:
+                                logging.error(f" > Cannot read {init_pop}:{e}")
+                                af_generator.arx = None
+                    else:
+                        logging.error(f"{init_pop} has no json[.gz] extension")
+                        af_generator.arx = None
+                elif fext == ".json":
+                    logging.info(f"Reading JSON {init_pop}")
+                    with open(init_pop)as fd:
                         try:
-                            arx = json.load(fd)
+                            af_generator.arx = json.load(fd)
+                            
                         except BaseException as e:
                             logging.error(f" > Cannot read {init_pop}:{e}")
-                            arx = None
+                            af_generator.arx = None
                 else:
-                    logging.error(f"{init_pop} has no json[.gz] extension")
-                    arx = None
-            elif fext == ".json":
-                logging.info(f"Reading JSON {init_pop}")
-                with open(init_pop)as fd:
-                    try:
-                        arx = json.load(fd)
-                        
-                    except BaseException as e:
-                        logging.error(f" > Cannot read {init_pop}:{e}")
-                        arx = None
+                    logging.error(f" > Unknown extension {fext} in {init_pop}")
+                    af_generator.arx = None
             else:
-                logging.error(f" > Unknown extension {fext} in {init_pop}")
-                arx = None
-            if not arx is None:
-                if not "parameters" in arx:
-                    logging.error(f" > There aren't parameters in the starter {init_pop}'")
-                    prm = None
-                else :
-                    prm = [ n for n,_,_,_ in arx['parameters'] ]
-                pop  = [
-                    p['parameters']
-                    for r in 'final records unique'.split() if r in arx
-                    for p in arx[r] if not p is None
+                logging.info(f" > Cannot read {init_pop} - file doesn't exist")
+                sys.stderr.write(f" > Cannot read {init_pop}  - file doesn't exist\n")
+                af_generator.arx = None
+        if not af_generator.arx is None:
+            if not "parameters" in af_generator.arx:
+                logging.error(f" > There aren't parameters in the starter {init_pop}")
+                sys.stderr.write(f"\n > There aren't parameters in the starter {init_pop}\n")
+                prm = None
+            else :
+                prm = [ n for n,_,_,_ in af_generator.arx['parameters'] ]
+            pop  = [
+                (p['parameters'] if type(p) is dict else p[1])
+                for r in 'final records unique checkpoint'.split() if r in af_generator.arx
+                for p in af_generator.arx[r] if not p is None
+            ]            
+            if len(pop) > af_generator.counter and not prm is None:
+                vect = pop[af_generator.counter]
+                rvec = af_ec2mod( generator_with_resolve_strings(prm_ranges,logscale),prm_ranges )
+                vect = [
+                    (vect[prm.index(n[0])] if n[0] in prm else rvec[ni])
+                    if type(n) is tuple or type(n) is list else 
+                    (vect[prm.index(n)]    if n    in prm else rvec[ni])
+                    for ni,(n,s,l,h) in enumerate(prm_ranges)
                 ]
-                if len(pop) > af_generator.counter and not prm is None:
-                    vect = pop[af_generator.counter]
-                    rvec = af_ec2mod( generator_with_resolve_strings(prm_ranges,logscale),prm_ranges )
-                    vect = [
-                        (vect[prm.index(n[0])] if n[0] in prm else rvec[ni])
-                        if type(n) is tuple or type(n) is list else 
-                        (vect[prm.index(n)] if n in prm else rvec[ni])
-                        for ni,(n,s,l,h) in enumerate(prm_ranges)
-                    ]
-                    logging.info(f" > a vector #{af_generator.counter:03d} has been read")
-                    af_generator.counter += 1 
-                    return af_mod2ec(vect,prm_ranges)
-
+                logging.info(f" > a vector #{af_generator.counter:03d} has been read")
+                af_generator.counter += 1 
+                return af_mod2ec(vect,prm_ranges)
+            else:
+                logging.error(f"Skip reading: len(pop)={len(pop)} < af_generator.counter={af_generator.counter} or prm={prm} is None")
+                sys.stderr.write(f"\nSkip reading len(pop)={len(pop)} < af_generator.counter={af_generator.counter} or prm={prm} is None\n")
+                return  generator_with_resolve_strings(prm_ranges,logscale)
         else:
-            logging.info(f" > Cannot read {init_pop} - file doesn't exist")
-            sys.stderr.write(f" > Cannot read {init_pop}  - file doesn't exist\n")
-            
+            return  generator_with_resolve_strings(prm_ranges,logscale)
     # if logscale:
         # return [nprnd.uniform(lo, hi) if pscale == "lin" else (nprnd.uniform(log10(lo), log10(hi)) if pscale == 'log' else lo) for pname,pscale,lo,hi in prm_ranges]
     # else:
         # return [lo if pscale == 'con' else nprnd.uniform(lo, hi)                                                               for pname,pscale,lo,hi in prm_ranges]
     
-    return  generator_with_resolve_strings(prm_ranges,logscale)
+    
 
 
 @crossover

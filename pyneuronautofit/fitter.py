@@ -1,4 +1,4 @@
-import sys,os,time,logging
+import sys,os,time,logging,json
 from optparse import OptionParser, OptionGroup
 from random import Random as rnd
 from numpy import *
@@ -30,8 +30,8 @@ EC_Algorithm.add_option("-E", "--number-elites",       dest="elites", default=32
     help="number of elites in the replacement (default 32)" )
 EC_Algorithm.add_option("-L", "--off-log-scale",      dest="logs",    default=True,            action="store_false",
     help="enable log scaling")
-EC_Algorithm.add_option("-I", "--init-population",    dest="initpop", default=None,            type='str',
-    help="file with a set of initial population" )
+EC_Algorithm.add_option("-I", "--init-population",    dest="initpop", default=False,           action="store_true",
+    help="If set it tries to read JASO target-filename with extension .link, find entrance 'check point' and use this file to resume simulations" )
 EC_Algorithm.add_option("-N", "--Krayzman-threshould",dest="krthr",   default=0.05,           type='float',
     help="Threshould for Krayzman's iteration procedure of weights adaptation (default 0.05)" )
 # EC_Algorithm.add_option("-N", "--no-negatives",       dest="nonegcor",default=False,           action="store_true",
@@ -77,6 +77,8 @@ Model_Cond.add_option("-z", "--spike-Zoom",         dest="spwtgh",  default=None
     help="if positive absolute weight of voltage diff during spike; if negative relataed scaler")
 Model_Cond.add_option("-e", "--collapse-diff",      dest="cdiff",   default=False,           action="store_true",
     help="Collapse difference between a model and data in a vector with size = number of tests (i.e. for  -m RAMNT the diff vector will be length 5)")
+Model_Cond.add_option("-o", "--smoofing-kernel",    dest="smoothkr",default=100.,            type='float',
+    help="size of smoothing kernel in ms (default 20)")
 oprs.add_option_group(Model_Cond)    
 
 #RUN
@@ -107,19 +109,18 @@ Run_.add_option(      "--log-archive",         dest="logarx",  default=False,   
     help="record archive into log file")
 Run_.add_option(      "--dry-run",             dest="dryrun",  default=False,           action="store_true",
     help="exit after init everything")
+Model_Cond.add_option("-T", "--sep-threshold", dest="threshold",default=0.8,            type='float',
+    help="threshold of Theil's U when evolution stops (default 0.8)")
+Model_Cond.add_option(      "--num-pca"     , dest="npca",     default=6,               type='int',
+    help="number of PCA components for clustering. should be less than number of parameter (default 6)")
+
 oprs.add_option_group(Run_) 
 
 opt, args = oprs.parse_args()
 
-timestamp  = "-v"+getversion()+time.strftime("-%Y%m%d-%H%M%S")
-timestamp += "-{:07d}-{}".format( random.randint(1999999) if opt.slurmid is None else opt.slurmid,opt.emode )
-timestamp += "-{}{}".format("L" if opt.logs else "F",opt.algor[0])
-if opt.riter >= 0:
-    timestamp += f"-I{opt.riter:03d}"
-
-if len(args) != 1:
-    logging.error("Need only one ABF, NPZ, or JSAON input file with currents and target states")
-    raise BaseException("Need only one ABF, NPZ, or JSAON input file with currents and target states")
+if len(args) == 0:
+    logging.error("Need at least one ABF, NPZ, or JSAON input file with currents and target states")
+    raise BaseException("Need at least one ABF, NPZ, or JSAON input file with currents and target states")
 
 algorithms = {"K": "Krayzman\'s weighted adaptation", "N":"Pareto nondominate selection", "M":"max scaled sum", "P":"Positive correlation" }
 if not opt.algor[0] in algorithms:
@@ -140,6 +141,57 @@ except BaseException as e :
         sys.stderr.write( "ERROR: ====== !!! FULL STOP !!! ======\n")
         raise BaseException(f"Cannot read condition mask from the {opt.emask}:{e}")
 
+if len(args) > 1:
+    sys.stderr.write("Enrolling MPI\n")
+    from mpi4py import MPI
+    comm   = MPI.COMM_WORLD
+    mpi_rank   = comm.rank
+    mpi_size   = comm.size
+    sys.stderr.write(f" > mpi rank   : {mpi_rank}\n")
+    sys.stderr.write(f" > mpi size   : {mpi_size}\n")
+    target = args[mpi_rank]
+    sys.stderr.write(f" > mpi target : {target}\n")
+else:
+    target = args[0]
+fname, fext = os.path.splitext(target)
+
+logheader  = [    '---------------------------------------------------']
+logheader.append(f'SCRIPT VERSION                      : {getversion()}')
+logheader.append(f'RUNNING PARAMETERS                  : '+" ".join(sys.argv))
+logheader.append( '---------------------------------------------------')
+logheader.append(f'Read initial population             : {opt.initpop}')
+if opt.initpop:
+    logheader.append(f'Loading                              : {fname}.link')
+    try:
+        with open(f'{fname}.link') as fd:
+            jlink = json.load(fd)
+    except BaseException as e:
+        logheader.append( f" > Cannot read `{fname}.link`: {e}")
+        jlink =  {}
+    if "check point" in jlink:
+        opt.initpop = jlink["check point"]
+        logheader.append(f" > check point file                  : {opt.initpop}")
+    else:
+        logheader.append( f"Cannot find `check point` in `{fname}.link`")
+        opt.initpop = None
+    if "restart counter" in jlink:
+        opt.riter = jlink["restart counter"] + 1
+        logheader.append(f" > this is a resumed iteration  #    : {opt.riter}")
+    elif opt.riter < 0:
+        opt.riter = 0
+        logheader.append(f" > this is the first iteration  #    : {opt.riter}")
+else:
+    opt.initpop = None
+    logheader.append(f" > starting from scratch             : {opt.initpop}")
+logheader.append( '---------------------------------------------------')
+
+
+timestamp  = "-v"+getversion()+time.strftime("-%Y%m%d-%H%M%S")
+timestamp += "-{:07d}-{}".format( random.randint(1999999) if opt.slurmid is None else opt.slurmid,opt.emode )
+timestamp += "-{}{}".format("L" if opt.logs else "F",opt.algor[0])
+if opt.riter >= 0:
+    timestamp += f"-I{opt.riter:03d}"
+
 if not opt.rstemp is None:
     timestamp = opt.rstemp
     if opt.riter >= 0: timestamp += f"-I{opt.riter:03d}"
@@ -150,9 +202,7 @@ if not opt.rstemp is None:
     Kr_log   = timestamp+"-KrWtLg.json" if opt.Krdb else None
     if not opt.lc:
         sys.stderr.write(f"Run stamp {timestamp}\n")
-
 else:
-    fname, fext = os.path.splitext(args[0])
     logname  = fname+timestamp+".log.gz"
     finalrec = fname+timestamp+"-final.json"
     chpntrec = fname+timestamp+"-chpnt.json"
@@ -160,14 +210,22 @@ else:
     Kr_log   = fname+timestamp+"-KrWtLg.json" if opt.Krdb else None
     if not opt.lc:
         sys.stderr.write(f"Run stamp: {fname+timestamp}\n >Options: "+" ".join(sys.argv)+"\n")
-
+    
+if len(args) > 1:
+    if fname not in opt.emask:
+        opt.emask = None
+        sys.stderr.write( f"WARNING: ====== !!! Cannot find {fname} in mask !!! ======\n")
+    else:
+        opt.emask = opt.emask[fname]
+        sys.stderr.write( f"Set mask for `{fname}` \n")
+        
+    
 if opt.lc:
     logging.basicConfig(                  format='%(asctime)s:%(name)-10s:%(lineno)-4d:%(levelname)-8s:%(message)s', level=eval("logging."+opt.ll) )
 else:
     import gzip
     logfd =  gzip.open(logname, mode='wt', encoding='utf-8')
     logging.basicConfig(stream = logfd,   format='%(asctime)s:%(name)-10s:%(lineno)-4d:%(levelname)-8s:%(message)s', level=eval("logging."+opt.ll) )
-
 
 try:
     from .autofit    import *
@@ -178,12 +236,8 @@ except:
     from pyneuronautofit.runandtest import RunAndTest
     from pyneuronautofit.evaluator  import Evaluator
     
-
-logging.info( '---------------------------------------------------')
-logging.info(f'SCRIPT VERSION                      : {getversion()}')
-logging.info(f'RUNNING PARAMETERS                  : '+" ".join(sys.argv))
-logging.info( '---------------------------------------------------')
-logging.info(f'Fitting to                          : {args[0]}')
+for _lh_ in logheader: logging.info( _lh_ )
+logging.info(f'Fitting to                          : {target}')
 logging.info(f'Final population                    : {finalrec}')
 logging.info(f'Checkpoint Charly                   : {chpntrec}')
 logging.info(f'Archive                             : {arXive}')
@@ -192,10 +246,11 @@ logging.info(f'Forced run stamp                    : {opt.rstemp}')
 logging.info( '---------------------------------------------------')
 
 # Test  evaluator
-e = Evaluator(args[0],mode = opt.emode,mask = opt.emask,prespike = opt.eleft,\
+e = Evaluator(target,mode = opt.emode,mask = opt.emask,prespike = opt.eleft,\
         postspike = opt.erght,spikethreshold = opt.ethsh,spikecount = opt.espc,\
         collapse_tests = opt.cdiff,vpvsize=opt.vpvsize,\
-        spikeweight=opt.spwtgh, downsampler = downsampler )
+        spikeweight=opt.spwtgh, smoothingkernel=opt.smoothkr,\
+        downsampler = downsampler )
 vl = e.diff(e,marks=True)
 vm = "".join([m for m,v in vl])
 vv = e.scores()
@@ -206,7 +261,7 @@ with open(arXive,'w') as fd:
     fd.write("\t\"bvalues\"   :" + json.dumps(vv)                +",\n")
     fd.write("\t\"parameters\":" + json.dumps(param_nslh)        +",\n")
     fd.write("\t\"version\"   :" + json.dumps(getversion())      +",\n")
-    fd.write("\t\"target\"    :" + json.dumps(args[0])           +",\n")
+    fd.write("\t\"target\"    :" + json.dumps(target)            +",\n")
     fd.write("\t\"evaluation\":" + json.dumps({
                         'mode'           : opt.emode,
                         'mask'           : opt.emask,
@@ -216,6 +271,7 @@ with open(arXive,'w') as fd:
                         'spikecount'     : opt.espc,
                         'collapse_tests' : opt.cdiff,
                         'spikeweight'    : opt.spwtgh,
+                        'smoothingkernel': opt.smoothkr,
                         'downsampler'    : downsampler,
                         'vpvsize'        : opt.vpvsize
                       })         +",\n")
@@ -259,7 +315,7 @@ logging.info(f' > collapse vector                  : {opt.cdiff}')
 logging.info(f' > vector length                    : {vl}')
 logging.info(f' > vector components                : {vm}')
 for c in opt.emode:
-    logging.info(f' \-> {c}                              : {len([ p for p in vm if p==c])}')
+    logging.info(r' \-> '+f'{c}                              : {len([ p for p in vm if p==c])}')
    
 logging.info( 'RUN:')
 logging.info(f' > number of threads                : {opt.nth}')
@@ -271,6 +327,12 @@ if opt.algor[0] == 'K':
     logging.info(f' > file for Krayzman\'s weight       : {Kr_log}')
 logging.info(f' > print out check points every     : {opt.nch}')
 logging.info(f' > dump  out check points every     : {opt.dch}')
+if len(args) > 1:
+    logging.info( 'MPI:')
+    logging.info(f' > MPI co-optimizer                 : {mpi_rank} in size {mpi_size}')
+    logging.info(f' > PCA components                   : {opt.npca}')
+    logging.info(f" > Theil's U threshold of separation: {opt.threshold}")
+    logging.info( '---------------------------------------------------')
 
 
 logging.info( 'PARAMETERS:')
@@ -285,6 +347,99 @@ for n,s,l,h in param_nslh:
 if opt.dryrun:
     exit(0)
 
+
+def theils_u(a):
+    '''
+    "color_given_box"
+    '''
+    a = asarray(a)
+
+    colors = a.ravel()
+    pc    = unique(colors, return_counts=True)[1] / colors.size
+    hc    = -(pc * log2(pc)).sum()
+
+    hcb = 0.0
+    for box in a:
+        p = len(box) / colors.size
+        pcg = unique(box, return_counts=True)[1] / len(box)
+        hcb += p * (-(pcg * log2(pcg)).sum())
+
+    return 1.0 if hc == 0 else (hc - hcb) / hc
+
+def separation_quality(parameters):
+    """
+    Each fitting procedure in each MPI node fits parameters to a different
+    recorded neuron. Neurons are all the from the same place and are 
+    the same type, therefore they are assumed to have similar channels
+    and overall fitting parameters are the same.
+    
+    parameters is a list of parameters for individuals in each fitting procedure.
+    
+    This procedure mixed all individual in one array and separate them on the 
+    number of cluster as number of fitting procedures. Then it computes
+    Theil's U - uncertainty coefficient of find a given neuron (box) by
+    the cluster into which parameters landed.
+    
+    Return a float between 0 - complete mess and 1 - perfect separation
+    """
+    from sklearn.decomposition import PCA
+    from sklearn.cluster import KMeans
+    from numpy import copy as npcopy
+    
+    parameters = asarray(parameters)
+    blind      = vstack( parameters ).copy()
+    models_m   = mean(blind,axis= 0)
+    blind     -= models_m
+    models_s   = std(blind,axis= 0)
+    blind     /= models_s
+    
+    pca        = PCA(n_components=opt.npca,whiten=True)
+    X          = pca.fit_transform(blind) 
+    kmean      = KMeans(n_clusters=mpi_size, n_init='auto').fit(X)
+    clt        = kmean.labels_.copy()
+    clt        = clt.reshape((mpi_size,clt.shape[0]//mpi_size))
+    u          = theils_u(clt)
+    return u
+
+def MPI_generation_termination(population, num_generations, num_evaluations, args):
+    logging.info(f"=== MPI communication ===")
+    samples = [ p.candidate[:] for p in population ]
+    try:
+        pbuf = comm.gather(samples,root=0)
+        logging.info(f" > Receive GATHER")
+    except BaseException as e:
+        logging.error(f"MPI gather failed with error: {e}")
+        raise RuntimeError(f"MPI gather failed with error: {e}")
+    if mpi_rank == 0:
+        try:
+            u    = separation_quality(pbuf)
+            
+        except BaseException as e:
+            logging.error(f"separation_quality failed with error: {e}")
+            raise RuntimeError(f"separation_quality failed with error: {e}")
+        thresholdlevel =  u > opt.threshold
+        logging.info(f" > Theil's U = {u} > {opt.threshold} = {thresholdlevel}")
+        try:
+            stop = comm.bcast(thresholdlevel ,root=0)
+        except BaseException as e:
+            logging.error(f"MPI broadcast failed with error: {e}")
+            raise RuntimeError(f"MPI broadcast failed with error: {e}")
+        logging.info(f" > sent {thresholdlevel} - received {stop}")
+    else:
+        try:
+            stop = comm.bcast(     None          ,root=0)
+        except BaseException as e:
+            logging.error(f"MPI broadcast failed with error: {e}")
+            raise RuntimeError(f"MPI broadcast failed with error: {e}")
+        logging.info(f" > received {stop}")
+        
+    if stop:
+        return stop
+    max_generations = args.setdefault('max_generations', 1)
+    return num_generations >= max_generations
+
+
+#<<<
 
 def list2dict(lst,param_ranges):
     d = {}
@@ -330,14 +485,20 @@ def RecArXive(wfitness,fitness,candidates,args):
             if "checkpoint_file" in args and type(args["checkpoint_file"]) is str:
                 chpntrec = args["checkpoint_file"]
             with open(chpntrec,"w") as fd:
-                fd.write("{\n\t\"Generation\":"+f"{RecArXive.chcount}"+",\n\t\"Population\":[\n")
+                fd.write("{\n\t\"Generation\":"+f"{RecArXive.chcount},\n")
+                fd.write("\t\"parameters\":"+f"{json.dumps(param_ranges)},\n")
+                fd.write("\t\"checkpoint\":[\n")
                 for il,(w,f,p) in enumerate(xpop):
-                    fd.write("\t\t"+json.dumps({"fitness":f, "parameters":p, "weighted-fitness":w })+",\n" if il < len(xpop)-1 else "\n")
+                    fd.write("\t\t"+json.dumps({"fitness":f, "parameters":p, "weighted-fitness":w })+(",\n" if il < len(xpop)-1 else "\n") )
                 fd.write("\t],\n\t\"Archive\":[\n")
                 for il,(f,p) in enumerate(mpop):
-                    fd.write("\t\t"+json.dumps({"fitness":f, "parameters":p})+",\n" if il < len(mpop)-1 else "\n")
+                    fd.write("\t\t"+json.dumps({"fitness":f, "parameters":p})+(",\n" if il < len(mpop)-1 else "\n") )
                 fd.write("\t]\n}\n")
-                
+            with open(f'{fname}.link','w') as fd:
+                json.dump({
+                    "check point": chpntrec,
+                    "restart counter" : opt.riter
+                },fd, indent=4)
 
 
     if chprint > 0:
@@ -617,7 +778,7 @@ def KrayzmanGA(candidates=[], args={}):
         logging.info( " > Current weights, correlation, [ fitness ], target")    
         for z,(m,V, w,v,f,c) in enumerate(zip(vectormarks,vecvalues,KrayzmanGA.weights,wfitness,fitness.T,corrs) ):
             tw,tc,tfmin,tfmean,tfmax = f"{w:0.6g}", f"{c:0.6g}", f"{amin(f):0.6g}", f"{mean(f):0.6g}", f"{amax(f):0.6g}"
-            logging.info(f" \-> {m} : "+("ON " if z  in KrayzmanGA.masking else "OFF")+f" : {tw:<15s} , {tc:<15s} : [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ] : {V:0.6g}")
+            logging.info(r" \-> "+f"{m} : "+("ON " if z  in KrayzmanGA.masking else "OFF")+f" : {tw:<15s} , {tc:<15s} : [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ] : {V:0.6g}")
             logging.debug(f"  `-> {f.tolist()}")
             
 
@@ -692,13 +853,13 @@ def MaxNormalization(candidates=[], args={}):
             for m,w,f,s in zip(vectormarks,MaxNormalization.scalers,fitness.T,sfitness.T):
                 tw,tfmin,tfmean,tfmax = f"{w:0.6g}", f"{amin(f):0.6g}", f"{mean(f):0.6g}", f"{amax(f):0.6g}"
                 tsmin,tsmean,tsmax = f"{amin(s):0.6g}", f"{mean(s):0.6g}", f"{amax(s):0.6g}"
-                logging.info(f" \-> {m} : {tw:<15s} : [ {tsmin:<15s}, {tsmean:<15s}, {tsmax:<15s} ] [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ]")
+                logging.info(r" \-> "+f"{m} : {tw:<15s} : [ {tsmin:<15s}, {tsmean:<15s}, {tsmax:<15s} ] [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ]")
                 logging.debug(f"  `-> {f.tolist()}")
         else:
             for m,V, w,f,s in zip(vectormarks,vecvalues,MaxNormalization.scalers,fitness.T,sfitness.T):
                 tw,tfmin,tfmean,tfmax = f"{w:0.6g}", f"{amin(f):0.6g}", f"{mean(f):0.6g}", f"{amax(f):0.6g}"
                 tsmin,tsmean,tsmax = f"{amin(s):0.6g}", f"{mean(s):0.6g}", f"{amax(s):0.6g}"
-                logging.info(f" \-> {m} : {tw:<15s} : [ {tsmin:<15s}, {tsmean:<15s}, {tsmax:<15s} ] [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ] : {V:0.6g}")
+                logging.info(r" \-> "+f"{m} : {tw:<15s} : [ {tsmin:<15s}, {tsmean:<15s}, {tsmax:<15s} ] [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ] : {V:0.6g}")
                 logging.debug(f"  `-> {f.tolist()}")
             
     else:
@@ -706,17 +867,17 @@ def MaxNormalization(candidates=[], args={}):
             for w,f,s in zip(MaxNormalization.scalers,fitness.T,sfitness.T):
                 tw,tfmin,tfmean,tfmax = f"{w:0.6g}", f"{amin(f):0.6g}", f"{mean(f):0.6g}", f"{amax(f):0.6g}"
                 tsmin,tsmean,tsmax = f"{amin(s):0.6g}", f"{mean(s):0.6g}", f"{amax(s):0.6g}"
-                logging.info(f" \->  {tw:<15s} : [ {tsmin:<15s}, {tsmean:<15s}, {tsmax:<15s} ] [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ]")
+                logging.info(r" \->  "+f"{tw:<15s} : [ {tsmin:<15s}, {tsmean:<15s}, {tsmax:<15s} ] [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ]")
                 logging.debug(f"  `-> {f.tolist()}")
         else:
             for V,w,f,s in zip(vecvalues,MaxNormalization.scalers,fitness.T,sfitness.T):
                 tw,tv,tfmin,tfmean,tfmax = f"{w:0.6g}", f"{amin(f):0.6g}", f"{mean(f):0.6g}", f"{amax(f):0.6g}"
                 tsmin,tsmean,tsmax = f"{amin(s):0.6g}", f"{mean(s):0.6g}", f"{amax(s):0.6g}"
-                logging.info(f" \->  {tw:<15s} : [ {tsmin:<15s}, {tsmean:<15s}, {tsmax:<15s} ] [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ] : {V:0.6g}")
+                logging.info(r" \->  "+f"{tw:<15s} : [ {tsmin:<15s}, {tsmean:<15s}, {tsmax:<15s} ] [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ] : {V:0.6g}")
                 logging.debug(f"  `-> {f.tolist()}")
     logging.info( " > Max scaling : Current scaled fitness")
     for f0,f1,f2,f3 in zip(wfitness[:-3:4],wfitness[1:-2:4],wfitness[2:-1:4],wfitness[3::4]):
-        logging.info(f" \->  {f0:0.3f} {f1:0.3f} {f2:0.3f} {f3:0.3f}")
+        logging.info(r" \->  "+f"{f0:0.3f} {f1:0.3f} {f2:0.3f} {f3:0.3f}")
 
     #DB>>
     # wjs = json.dumps([fitness.tolist(), weights.tolist(), wfitness.tolist()])
@@ -733,7 +894,7 @@ ea = ec.emo.NSGA2(rnd()) if opt.algor[0] == 'N' else ec.GA(rnd())
 
 ea.observer = af_repoter
 ea.variator = [af_crossover, af_mutation]
-ea.terminator = ec.terminators.evaluation_termination
+ea.terminator = MPI_generation_termination if len(args) > 1 else ec.terminators.generation_termination
 
 if   opt.algor[0]=='N': algor = ParetoGA
 elif opt.algor[0]=='M': algor = MaxNormalization
@@ -776,7 +937,7 @@ final_pop = ea.evolve(generator          = af_generator,
                       checkpoint_print   = opt.nch,
                       checkpoint_count   = opt.dch,
                       arXive_file        = arXive,
-                      expTarget          = args[0],
+                      expTarget          = target,
                       logpop             = opt.logpop,
                       logarx             = opt.logarx,
                       evalparams         = {
@@ -803,8 +964,8 @@ with open(finalrec,'w') as fd:
     fd.write("\t\"markers\"   :" + json.dumps(list(vm))          +",\n")
     fd.write("\t\"bvalues\"   :" + json.dumps(vv)                +",\n")
     fd.write("\t\"parameters\":" + json.dumps(param_nslh)        +",\n")
-    fd.write("\t\"version\"   :" + json.dumps(getversion())          +",\n")
-    fd.write("\t\"target\"    :" + json.dumps(args[0])           +",\n")
+    fd.write("\t\"version\"   :" + json.dumps(getversion())      +",\n")
+    fd.write("\t\"target\"    :" + json.dumps(target)            +",\n")
     fd.write("\t\"evaluation\":" + json.dumps({
                         'mode'           : opt.emode,
                         'mask'           : opt.emask,
@@ -830,4 +991,6 @@ if not Kr_log is None:
         fd.write("\tnull\n}\n")
 
 logging.info("DONE")
+# os.system(f'gzip -9 {finalrec} {chpntrec} {arXive}')
+os.system(f'gzip -9 {finalrec} {arXive}')
 print(fname+timestamp)

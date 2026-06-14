@@ -28,7 +28,9 @@ class RunAndTest():
         celsius:(float,None) = None,
         init:(dict,None)     = None,
         dt:(float,None)      = None,
-        lock:(Lock,None)=None,logname:(str,None)=None,loglevel:str="INFO"):
+        lock:(Lock,None)     = None,
+        logname:(str,None)   = None,
+        loglevel:str         = "INFO"):
         self.eval      = evaluator
         self.params    = params        
         self.celsius   = celsius
@@ -105,6 +107,7 @@ class RunAndTest():
             if init is not None:
                 for var in init:
                     self.__nrn_SetPrm__(n,var,init[var ])
+            n.setcable()
             
             pop[nid].setcable()
             ic.amp = self.eval.TestCurr[nid][0]*1e-3
@@ -175,6 +178,9 @@ class RunAndTest():
         elif int(view) == 3:
             e = self.eval.clone(scldrecs)
             return self.eval.diff(e,marks=True),atrec,arecs,e,scldrecs,tscale
+        elif int(view) == 4:
+            e = self.eval.clone(scldrecs)
+            return self.eval.diff(e,marks=True),atrec,arecs,e,scldrecs,tscale,self.eval
         elif view: 
             return atrec,arecs
         else:
@@ -182,7 +188,8 @@ class RunAndTest():
             return self.eval.clone(scldrecs)
 
     def __call__(self, params=None)->list:
-        return self.__run__(params=params,view=False) - self.eval
+        self.trase_eval = self.__run__(params=params,view=False)
+        return  self.trase_eval - self.eval
 
 def ReadArXive(fname,selection):
     def read_arxive(fd):
@@ -272,6 +279,7 @@ def ReadArXive(fname,selection):
             exit(1)
         logging.info(f"Selection = {selection}")
         collections = [ collections[i] for i in selection]
+        logging.info(f"Collection= {collections}")
     logging.info( "==================== DONE")
     
     return collections,markers,bvalues,parameters,\
@@ -290,6 +298,8 @@ if __name__ == '__main__':
     oprs.add_option("-L", "--Left",        dest="left",    default=None,   help="left sample for spike shape",                            type="int")
     oprs.add_option("-R", "--Right",       dest="rght",    default=None,   help="right sample for spike shape",                           type="int")
     oprs.add_option("-C", "--Count",       dest="count",   default=None,   help="number of spikes to analyze in spike shape and width",   type="int")
+    oprs.add_option("-o", "--smoof-kernel",dest="skr",     default=None,  help="size of smoothing kernel in ms",                          type='float')
+
     oprs.add_option("-Z", "--spike-Zoom",  dest="spwtgh",  default=None,                                                                  type="float",\
         help="if positive absolute weight of voltage diff during spike; if negative relataed scaler")
     oprs.add_option("-Q","--v-dvdt-size",  dest="vpvsize", default=None,                                                                  type='int',\
@@ -305,6 +315,7 @@ if __name__ == '__main__':
     oprs.add_option("-N", "--Num-threads", dest="nthrs",   default=os.cpu_count(),                                                        type="int",\
         help="Number of thread avalible for process. If not set all will be used. Set to 0 to stop multithreading")
     
+    oprs.add_option("-D", "--debug",       dest="debug", default=False,  help="DEBUG",                                                  action="store_true")
     oprs.add_option("-d", "--diff",        dest="diff",  default=False,  help="Print out differences",                                  action="store_true")
     oprs.add_option("-c", "--collapsed-diff",dest="cdiff",default=False, help="Print out collapsed differences",                        action="store_true")
     oprs.add_option("-v", "--view",        dest="view",  default=False,  help="Show graphs with voltages",                              action="store_true")
@@ -341,6 +352,11 @@ if __name__ == '__main__':
     collections,markers,bvalues,parameters,version,\
         cmd,target,evaluation,selection = ReadArXive(args[0],opt.nrnid)
 
+    #DB>>
+    # print(collections)
+    # exit(0)
+    #<<DB
+    
     ### Altering Parameters and Evaluation if it's needed >>>
     if parameters is not None: prm_nslh = parameters
     if opt.input is not None: target = opt.input
@@ -373,6 +389,8 @@ if __name__ == '__main__':
         evaluation['spikeweight'] = opt.spwtgh
     if opt.vpvsize is not None:
         evaluation['vpvsize'] = opt.vpvsize
+    if opt.skr is not None:
+        evaluation['smoothingkernel'] = opt.skr
     ### <<<--------------------------------------------------
 
     logging.info(f"Target file           :{target}")
@@ -405,7 +423,6 @@ if __name__ == '__main__':
 
 
     ### Run Evaluation in parallel >>>
-    import multiprocessing as mp
     def worker(p):
         if   type(p) is list:
             prm = {}
@@ -420,8 +437,11 @@ if __name__ == '__main__':
         else:
             raise RuntimeError(f"Unsupported parameters type {type(p)}. It should be list or dictionary")
             exit(1)
+        
         if opt.view:
-            if opt.diff or opt.cdiff:
+            if opt.debug:
+                fitness = RunAndTest(evaluator,celsius=opt.celsius,dt=opt.simdt, params=prm).__run__(view=4)
+            elif opt.diff or opt.cdiff:
                 fitness = RunAndTest(evaluator,celsius=opt.celsius,dt=opt.simdt, params=prm).__run__(view=2)
             else:
                 fitness = RunAndTest(evaluator,celsius=opt.celsius,dt=opt.simdt, params=prm).__run__(view=opt.view)
@@ -429,6 +449,7 @@ if __name__ == '__main__':
             fitness = RunAndTest(evaluator,celsius=opt.celsius,dt=opt.simdt)(params=prm)
         return fitness
     if opt.nthrs > 0:
+        import multiprocessing as mp
         pool = mp.Pool(processes=opt.nthrs)
         result = [pool.apply_async(worker,[p]) for _,p in collections]
         pool.close()
@@ -509,7 +530,9 @@ if __name__ == '__main__':
             sp.plot(arange(rec.shape[0])*evaluator.expdt,rec)
 
         xlines = []
-        if opt.diff or opt.cdiff:
+        if opt.debug:
+            vdiff,trec,recs,e,scldrecs,tscale,evalu = result[0]
+        elif opt.diff or opt.cdiff:
             vdiff,trec,recs = result[0]
         else:
             trec,recs = result[0]
@@ -517,6 +540,12 @@ if __name__ == '__main__':
         for sp,rec in zip(subplots,recs):
             l, = sp.plot(trec,array(rec))
             xlines.append(l)
+        if opt.debug and 'X' in evalu.mode:
+            for sp,evl,rec in zip(subplots,evalu.cond['X'],e.cond['X']):
+                sp.plot(arange(evl.shape[0])*evaluator.expdt,evl,'-.')
+                sp.plot(arange(rec.shape[0])*evaluator.expdt,rec,'--')
+                
+            
         keypass.recid = 0
         if opt.diff or opt.cdiff:
             adiff = array([ [ v for m,v in d ] for d,_,_ in result ])
@@ -560,7 +589,8 @@ if __name__ == '__main__':
         # show()
         
     else:
-        ev  = RunAndTest(evaluator,celsius=opt.celsius,dt=opt.simdt).__run__(params=prms)
-        print(ev.vector())
+        rat  = RunAndTest(evaluator,celsius=opt.celsius,dt=opt.simdt)
+        for _,prms in collections:
+            print(worker(prms))
         
         
