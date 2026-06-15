@@ -5,7 +5,7 @@ from inspyred.ec import Individual
 from inspyred.ec.replacers import generational_replacement
 
 
-class Krayzman(Individual):
+class Krayzman(object):
     """
     This class serves as the foundation for Krayzman’s algorithm for 
     multi-objective optimization, which is based on adaptive weights. 
@@ -34,11 +34,9 @@ class Krayzman(Individual):
     flattening representations of individual fitness functions in 
     the weighted single-value fitness.
     """
-    # This elegant way doesn't work, when this class is a object in another object
-    #  I guess it is namespace problem. So switching to old-school explicit members
-    # # Shared weights and masks
-    # adaptive_weights = []
-    # unmasked_weights = []
+    # Shared weights and masks
+    adaptive_weights = []
+    unmasked_weights = []
     
     def __set_weights_and_masks__(self,size:int):
         self.logger.debug(f"updating size to {size}") 
@@ -46,14 +44,14 @@ class Krayzman(Individual):
             self.logger.info(f"adaptive weights is smaller {len(self.adaptive_weights)} than requested {size} ... updating") 
             self.adaptive_weights += [ 1 for i in range(len(self.adaptive_weights),size) ]
         elif len(self.adaptive_weights) == size:
-            return
+            pass
         else:
             self.logger.error(f"Cannot downsize existing weight vector of len={len(self.adaptive_weights)} to size {size}.")
             raise RuntimeError(f"Cannot downsize existing weight vector of len={len(self.adaptive_weights)} to size {size}.")
         if   len(self.unmasked_weights) < size:
             self.logger.info(f"maskes is smaller {len(self.unmasked_weights)} than requested {size} ... updating") 
-            
-            self.unmasked_weights = [ i for i in range(size) if self.adaptive_weights[i] > 0 ]
+            self.unmasked_weights.clear()
+            self.unmasked_weights += [ i for i in range(size) if self.adaptive_weights[i] > 0 ]
     def normalize_weights(self, normspace:bool, ):
         self.logger.debug(\
         "  > normalizing by space under the curve" \
@@ -66,7 +64,8 @@ class Krayzman(Individual):
                 if normspace else \
                 np.amax(adaptive_weights[self.unmasked_weights])\
             )
-        self.adaptive_weights = adaptive_weights.tolist()[:]
+        self.adaptive_weights.clear()
+        self.adaptive_weights += adaptive_weights.tolist()[:]
 
     def init_weights(self,fitness:list, normspace:bool, variance_cutoff:float):
         self.logger.debug(f'KAW init weights:')
@@ -74,11 +73,13 @@ class Krayzman(Individual):
         self.logger.debug(f'  > variance         : {variance}')
         finite_ids,      = np.where( variance > variance_cutoff )
         self.logger.debug(f'  > finite_ids       : {finite_ids}')
-        self.unmasked_weights = finite_ids.astype(int).tolist()
+        self.unmasked_weights.clear()
+        self.unmasked_weights += finite_ids.astype(int).tolist()
         self.logger.debug(f'  > unmasked_weights : {self.unmasked_weights}')
         inverce_variance = 1./variance[self.unmasked_weights]
         self.logger.debug(f'  > inverce_variance : {inverce_variance}')
-        self.adaptive_weights = [
+        self.adaptive_weights.clear()
+        self.adaptive_weights += [
             float(inverce_variance[self.unmasked_weights.index(i)])\
             if i in self.unmasked_weights else -1. \
             for i in range(variance.shape[0])
@@ -97,7 +98,6 @@ class Krayzman(Individual):
         m2m     = float( corr[minid] / corr[maxid] )
         self.logger.debug(f"compute correlations: {m2m}={corr[minid]} /{corr[maxid]} : {corr}")
         return m2m, int(minid), int(maxid)
-        
         
         
     def update_weights(self,accumulator:list, threshold:float = 0.0, normspace:bool=False, init=False, variance_cutoff:float=1e-9):
@@ -133,14 +133,14 @@ class Krayzman(Individual):
             self.logger.debug(f"KAW: m2m lower than threshold {m2m} < {threshold}: updating weights in #({minid},{maxid})")
             old_m2m  = m2m
             
-            self.logger.debug("KAW: Updating and Normalizing wight")
-            self.logger.debug("   > weights before update: {self.adaptive_weights}")
-            self.logger.debug("   > updating unmasked_weights[{minid}]]={unmasked_weights[minid]]}, unmasked_weights[{maxid}]]={unmasked_weights[maxid]]}")
+            self.logger.debug( "KAW: Updating and Normalizing wight")
+            self.logger.debug(f"   > weights before update: {self.adaptive_weights}")
+            self.logger.debug(f"   > updating unmasked_weights[{minid}]]={self.unmasked_weights[minid]}, unmasked_weights[{maxid}]]={self.unmasked_weights[maxid]}")
             self.adaptive_weights[self.unmasked_weights[minid]] *= 1+1.1/float(len(self.unmasked_weights))
             self.adaptive_weights[self.unmasked_weights[maxid]] *= 1-1.0/float(len(self.unmasked_weights))
-            self.logger.debug("   > weights after  update: {self.adaptive_weights}")
+            self.logger.debug(f"   > weights after  update: {self.adaptive_weights}")
             self.normalize_weights(normspace = normspace)
-            self.logger.debug("   > weights after normalization: {self.adaptive_weights}")
+            self.logger.debug(f"   > weights after normalization: {self.adaptive_weights}")
             
             self.logger.debug("KAW: Computing weighted fitness and correlations")
             wfitness = [ p.fitness for p in accumulator if p.fitness is not None ]
@@ -159,12 +159,10 @@ class Krayzman(Individual):
         self.logger.debug(f'  > adaptive_weights : {self.adaptive_weights}')
         return
 
-    def __init__(self,fitness, weights=[], unmasked=[], maximize=False):
+    def __init__(self,fitness, maximize=False):
         self.logger           = logging.getLogger(self.__class__.__name__)
         self.fitness          = fitness
         self.maximize         = maximize
-        self.adaptive_weights = weights
-        self.unmasked_weights = unmasked
     @property
     def fitness(self):
         return self.fitness
@@ -199,10 +197,12 @@ class Krayzman(Individual):
             self.logger.error(f" > Masks   = {self.unmasked_weights}")
             raise RuntimeError(f"Krayzman - {e} : Values  = {self.values}, Weights = {self.adaptive_weights}, Masks   = {self.unmasked_weights}")
     
-        
-    def __lt__(self,other):
+    def _wrap_other_(self, other):
         if not isinstance(other, Krayzman):
-            other = Krayzman(other,weights=self.adaptive_weights,unmasked=self.unmasked_weights)
+            other = Krayzman(other)
+        return other
+    def __lt__(self,other):
+        other = self._wrap_other_(other)
         if self.maximize:
             if   self.values   is None: return True
             elif other.fitness is None: return False
@@ -212,8 +212,7 @@ class Krayzman(Individual):
             elif other.fitness is None: return True
             return self.fitness <  other.fitness
     def __le__(self,other):
-        if not isinstance(other, Krayzman):
-            other = Krayzman(other,weights=self.adaptive_weights,unmasked=self.unmasked_weights)
+        other = self._wrap_other_(other)
         if self.maximize:
             if   self.values   is None: return True
             elif other.fitness is None: return False
@@ -223,8 +222,7 @@ class Krayzman(Individual):
             elif other.fitness is None: return True
             return self.fitness <= other.fitness
     def __gt__(self,other):
-        if not isinstance(other, Krayzman):
-            other = Krayzman(other,weights=self.adaptive_weights,unmasked=self.unmasked_weights)
+        other = self._wrap_other_(other)
         if self.maximize:
             if   self.values   is None: return False
             elif other.fitness is None: return True
@@ -234,8 +232,7 @@ class Krayzman(Individual):
             elif other.fitness is None: return False
             return self.fitness >  other.fitness
     def __ge__(self,other):
-        if not isinstance(other, Krayzman):
-            other = Krayzman(other,weights=self.adaptive_weights,unmasked=self.unmasked_weights)
+        other = self._wrap_other_(other)
         if self.maximize:
             if   self.values   is None: return False
             elif other.fitness is None: return True
@@ -245,12 +242,10 @@ class Krayzman(Individual):
             elif other.fitness is None: return False
             return self.fitness >= other.fitness
     def __eq__(self,other):
-        if not isinstance(other, Krayzman):
-            other = Krayzman(other)
+        other = self._wrap_other_(other)
         return self.fitness == other.fitness
     def __ne__(self,other):
-        if not isinstance(other, Krayzman):
-            other = Krayzman(other)
+        other = self._wrap_other_(other)
         return self.fitness != other.fitness
     def __call__(self):
         return self.fitness
@@ -278,9 +273,10 @@ class Krayzman(Individual):
         if not 'values' in dump:
             raise RuntimeError(f'There are not values in the dump:{dump}')
         self.values   = dump['values']
-        if not 'weights' in dump:
-            raise RuntimeError(f'There are not weights in the dump:{dump}')
-        self.maximize = dump['maximaze'] 
+        if not 'maximaze' in dump:
+            raise RuntimeError(f'There are not maximaze in the dump:{dump}')
+        self.maximize = dump['maximaze']
+        
         if 'weights' in dump:
             self.adaptive_weights.clear()
             self.adaptive_weights += dump['weights']
@@ -288,73 +284,99 @@ class Krayzman(Individual):
             self.unmasked_weights.clear()
             self.unmasked_weights += dump['unmasked']
 
-# def KAW_updater(random, population, parents, offspring, args):
-def KAW_updater(population, num_generations, num_evaluations, args):
-    adap_size = args.get("adaptation_size", None )
-    threshold = args.get("threshold"      , 0.05 )
-    reinit    = args.get("reinit_after"   , 40   )
-    varlimit  = args.get("variance_cutoff", 1e-9 )
-    # replacer  = args.get("KAW_replacer"   , generational_replacement)
+def KAW_evaluator(candidates=[], args={}):
+    logscale       = args.get("logscale",False)
+    norm_evaluator = args.get("norm_evaluator",ec.evaluators.parallel_evaluation_mp)
+    use_Pareto     = args.get('use_Pareto', False)
+    adap_intervals = args.get('adap_int',0)
+    krayzman_th    = args.get('krayzman_threshold', 0.05)
+    normspace      = args.get('normspace', False)
 
-    if not hasattr(KAW_updater,"reinit_counter"):
-        KAW_updater.reinit_counter = reinit
-        KAW_updater.weight         = []
-        KAW_updater.unmasked       = []
+    adap_size      = args.get("adaptation_size", None )
+    threshold      = args.get("threshold"      , 0.05 )
+    reinit         = args.get("reinit_after"   , 40   )
+    varlimit       = args.get("variance_cutoff", 1e-9 )
+    
+    fitness        = norm_evaluator(candidates, args)
+    fitness        = [ Krayzman(f) for f in fitness ]
 
-    accumulator =[]
-    for p in args["_ec"].population:
-        if p is not None and p.fitness is not None:
-            if not isinstance(p.fitness,Krayzman):
-                p.fitness = Krayzman(p.fitness, weights=KAW_updater.weight[:], unmasked=KAW_updater.unmasked[:])
-            accumulator.append(p.fitness)
+    if not hasattr(KAW_evaluator,"reinit_counter"):
+        KAW_evaluator.reinit_counter = reinit
+        KAW_evaluator.accumulator    = []
+        KAW_evaluator.logger         = logging.get_logger("KAW_evaluator")
+        
+
+
+    KAW_evaluator.accumulator += fitness[:]
     
     if adap_size is None:
-        if KAW_updater.reinit_counter >= reinit:
-            logging.info(f"KAW_updater: Reinit weights after {KAW_updater.reinit_counter} updates")
-            accumulator[0].update_weights(accumulator, init=True,variance_cutoff=varlimit)
-            KAW_updater.reinit_counter  = 0
+        if KAW_evaluator.reinit_counter >= reinit:
+            KAW_evaluator.logger.info(f"Reinit weights after {KAW_evaluator.reinit_counter} updates")
+            KAW_evaluator.accumulator[0].update_weights(
+                KAW_evaluator.accumulator, 
+                init=True, 
+                variance_cutoff=varlimit
+            )
+            KAW_evaluator.reinit_counter  = 0
+            KAW_evaluator.accumulator.clear()
         else:
-            logging.info(f"KAW_updater: Incrimental update #{KAW_updater.reinit_counter}  hreshold = {threshold}")
-            accumulator[0].update_weights(accumulator, init=False,threshold = threshold,variance_cutoff=varlimit)
-            KAW_updater.reinit_counter += 1
+            KAW_evaluator.logger.info(f"Incrimental update #{KAW_evaluator.reinit_counter}  hreshold = {threshold}")
+            accumulator[0].update_weights(
+                KAW_evaluator.accumulator, 
+                init=False,
+                threshold = threshold,
+                variance_cutoff=varlimit
+            )
+            KAW_evaluator.reinit_counter += 1
+            KAW_evaluator.accumulator.clear()
     else:
-        if not hasattr(KAW_updater,"accumulator"):
-            KAW_updater.accumulator = []
-        if len(KAW_updater.accumulator) < adap_size:
-            logging.info(f"KAW_updater: Accumulation phase {len(KAW_updater.accumulator)} < {adap_size}")
-            KAW_updater.accumulator += accumulator
+        if len(KAW_evaluator.accumulator) < adap_size:
+            KAW_evaluator.logger.info(f"Accumulation phase {len(KAW_evaluator.accumulator)} < {adap_size}")
         else:
-            if KAW_updater.reinit_counter >= reinit:
-                logging.info(f"KAW_updater: Grand initialization after {KAW_updater.reinit_counter} updates with candidates size {len(x.accumulator)}")
-                accumulator[0].update_weights(KAW_updater.accumulator,init=True,variance_cutoff=varlimit)
-                KAW_updater.reinit_counter  = 0
+            if KAW_evaluator.reinit_counter >= reinit:
+                KAW_evaluator.logger.info(f"Grand initialization after {KAW_evaluator.reinit_counter} updates with candidates size {len(x.accumulator)}")
+                KAW_evaluator.accumulator[0].update_weights(
+                    KAW_evaluator.accumulator,
+                    init=True,
+                    variance_cutoff=varlimit
+                )
+                KAW_evaluator.reinit_counter  = 0
+                KAW_evaluator.accumulator.clear()
             else:
-                logging.info(f"KAW_updater: Incrimental update #{KAW_updater.reinit_counter} with candidates size {len(x.accumulator)} and threshold = {threshold}")
-                accumulator[0].update_weights(KAW_updater.accumulator,init=False,threshold = threshold,variance_cutoff=varlimit)
-                KAW_updater.reinit_counter += 1
+                KAW_evaluator.logger.info(f"Incrimental update #{KAW_evaluator.reinit_counter} with candidates size {len(x.accumulator)} and threshold = {threshold}")
+                KAW_evaluator.accumulator[0].update_weights(
+                    KAW_evaluator.accumulator,
+                    init=False,
+                    threshold = threshold,
+                    variance_cutoff=varlimit
+                )
+                KAW_evaluator.reinit_counter += 1
+                KAW_evaluator.accumulator.clear()
     
-    KAW_updater.weight   = accumulator[0].adaptive_weights[:]
-    KAW_updater.unmasked = accumulator[0].unmasked_weights[:]
-    logging.debug(f"KAW_updater: KAW_updater.weight   = {KAW_updater.weight}")
-    logging.debug(f"KAW_updater: KAW_updater.unmasked = {KAW_updater.unmasked}")
+    weights  = accumulator[0].adaptive_weights[:]
+    unmasked = accumulator[0].unmasked_weights[:]
+    KAW_evaluator.logger.info(f"> weight   = {weights}")
+    KAW_evaluator.logger.info(f"> unmasked = {unmasked}")
+    KAW_evaluator.logger.debug("Checking that weights changed through population")
     for p in args["_ec"].population:
-        if p is None or p.fitness is None: continue
-        if not isinstance(p.fitness,Krayzman): continue
-        p.fitness.adaptive_weights = KAW_updater.weight[:]
-        p.fitness.unmasked_weights = KAW_updater.unmasked[:]
+        if not isinstance(p.fitness,Krayzman):
+            KAW_evaluator.logger.warning("there is a individual in the population with not Krayzman fitness: {p}")
+            continue
+        KAW_evaluator.logger.debug(f" > w={p.fitness.adaptive_weights}, mask={p.fitness.unmasked_weights} v={p.fitness.values} f={p.fitness}")
+        
 
-    return
+    return fitness
     
 if __name__ == "__main__":
     logging.basicConfig(format='%(asctime)s:%(lineno)-6d%(levelname)-8s:%(message)s', level=logging.DEBUG )
-    a,b,c = Krayzman([1,2,3,4,5]), Krayzman([1,3,4,5,6]), Krayzman([1,7,6,5,4])
+    a,b,c = Krayzman([1,2,3,4,5]), Krayzman([2,2,6,8,10]), Krayzman([5,2,3,2,1])
     print("=== a,b ===")
     print(a.unmasked_weights, a.adaptive_weights)
     print(a < b, a <= b, a == b, a != b ,a >=b, a > b)
     print("== init ==")
     a.update_weights([a,b],init=True)
-    print(a.unmasked_weights, a.adaptive_weights)
-    print(a.fitness,b.fitness)
+    print(a.unmasked_weights, a.adaptive_weights,a.values, a.fitness)
+    print(b.unmasked_weights, b.adaptive_weights,b.values, b.fitness)
     print()
     
     print("== a,b,c ==")
