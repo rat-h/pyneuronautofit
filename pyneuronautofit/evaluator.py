@@ -22,7 +22,7 @@ class Evaluator():
             P - difference in probability density on v,dv/dt plane weighted by 1 - target_dencity/sum(target_dencity)
             Q - the same as P but only during stimulus.  
             R - resting potential
-            S - spike shapes during stimulus
+            S - spike shapes during stimulus (somewhat duplication of A)
             T - spike times
             U - squared error of voltage (somewhat duplication of V)
             V - distance between voltages
@@ -70,6 +70,22 @@ class Evaluator():
             else:
                 logging.error(f"Unknown file type {fext}")
                 raise BaseException(f"Unknown file type {fext}")
+        self.evalparams = {
+            "inputfile"      : inputfile, 
+            "mode"           : self.mode, 
+            "mask"           : self.mask,
+            "prespike"       : self.prespike, 
+            "postspike"      : self.postspike,
+            "spikethreshold" : spikethreshold, 
+            "spikecount"     : self.spikecount,
+            "spikeweight"    : self.spikeweight, 
+            "downsampler"    : self.downsampler,
+            "vpvsize"        : self.vpvsize, 
+            "smoothingkernel": self.smoothingkernel,
+            "pedant"         : self.pedant,
+            "collapse_tests" : self.collapse, 
+            "savetruedata"   : self.savetruedata
+        }
     
 
     def _detect_stims(self,currents:list,dt:float):
@@ -102,8 +118,10 @@ class Evaluator():
         if   type(mask) is int:
             return io <= mask
         elif type(mask) is tuple:
-            if len(mask) == 2: return mask[0] <= io <= mask[1]
-            logging.error(f"Mask in tuple should have len 2, got {len(mask)}")
+            if len(mask) == 2 or len(mask) == 3:
+                xids = [ _ for _ in range(*mask) ]
+                return io in xids
+            logging.error(f"Mask in tuple should have len 2 or 3, got {len(mask)}")
             raise BaseException(f"Mask in tuple should have len 2, got {len(mask)}")
         elif type(mask) is list:
             return io in mask
@@ -279,7 +297,7 @@ class Evaluator():
                 moments    = spstats.moment(o[self.stimLidx:self.stimRidx],linspace(3,4,2))/power(vstd,linspace(3,4,2))
                 rend['M'] += xstat+moments.tolist()
             if self._cmam('A',io):
-                rend['A'][-1] = (ones(self.prespike+self.postspike)*1e3) if rend['A'][-1][0] is None else (rend['A'][-1][0]/rend['A'][-1][1])
+                rend['A'][-1] = None if rend['A'][-1][0] is None else (rend['A'][-1][0]/rend['A'][-1][1])
 
         if ('P' in  self.mode and setPvpv) or ('Q' in self.mode and setQvpv):
             if 'P' in  self.mode and setPvpv:
@@ -481,7 +499,7 @@ class Evaluator():
                 raise  TypeError(f"{n} has a wrong type in condition {i}: have {type(rend['cond'][n])} but should be {t}")
         for n in 'U V A C D X'.split():
             if n in rend['mode']:
-                rend[n] = [ array(o)             for o in rend[n] ]
+                rend[n] = [ (o if o is None else array(o)) for o in rend[n] ]
         if 'S' in rend['mode']:
             rend['S']= [ [array(p) for p in o] for o in rend['S'] ]
         for n in 'R L M N O'.split():
@@ -539,13 +557,13 @@ class Evaluator():
         }
         for n in 'U V A X C D'.split():
             if n in self.mode:
-                rend['cond'][n] = [ o.tolist() for o in self.cond[n] ]
+                rend['cond'][n] = [ (o if o is None else o.tolist()) for o in self.cond[n] ]
         if 'S' in self.mode:
             rend['cond']['S'] = [ [ p.tolist() for p in o] for o in self.cond['S'] ]
         for n in 'T W F'.split():
             if n in self.mode:
                 rend['cond'][n] = self.cond[n]
-        for n in 'R L M A N O'.split():
+        for n in 'R L M N O'.split():
             if n in self.mode:
                 rend['cond'][n] = self.cond[n].tolist()
 
@@ -589,7 +607,7 @@ class Evaluator():
                 vec += self.cond[n].tolist()
         for n in 'U V Z C D A'.split():
                if n in self.mode:
-                    vec +=  [ o.tolist() for o in self.cond[n] ]
+                    vec +=  [ (o if o is None else o.tolist()) for o in self.cond[n] ]
         if 'S' in self.mode:
             vec +=  [ [ p.tolist() for p in o] for o in self.cond['S'] ]
         for n in 'T W F'.split():            
@@ -603,7 +621,7 @@ class Evaluator():
         clone0.cond = {}
         for n in 'U V Z C D A X'.split():
             if n in self.mode:
-                clone0.cond[n] =  [ zeros(o.shape) for o in self.cond[n] ]
+                clone0.cond[n] =  [ (o if o is None else zeros(o.shape)) for o in self.cond[n] ]
         
         if 'P' in self.mode:
             clone0.cond['P'] =  [  ]
@@ -773,7 +791,18 @@ class Evaluator():
         if len(self.cond['A']) != len(oo.cond['A']):
                 logging.error("Numbers of A-conditions are different\n\n")
                 raise RuntimeError("Numbers of A-conditions are different")
-        diff = [ sum(abs( x - y ))/x.shape[0] for x,y in zip(self.cond['A'],oo.cond['A']) ]
+        diff = []
+        for x,y in zip(self.cond['A'],oo.cond['A']):
+            if x is None and y is None:
+                diff.append(0.)
+            elif x is None:
+                diff.append( sum(abs(y)) ) #we do not divided by y.shape[0] to make total deviation bigger
+                                           # just because space under the curve can be smaller than some spike 
+                                           # shapes differences.
+            elif y is None:
+                diff.append( sum(abs(x)) )
+            else:
+                diff.append( sum(abs( x - y ))/x.shape[0] )
         return [ sum(diff) ] if self.collapse else diff
 
     def spikenumbr_error(self,oo)->list:
@@ -837,7 +866,10 @@ class Evaluator():
                 raise RuntimeError("Numbers of V-conditions are different")
         rend = []
         for vl1,vl2 in zip(self.cond['V'],oo.cond['V']):
-            m = min(vl1.shape[0],vl2.shape[0])
+            #DB>>
+            # print("DB>> totlvoltdf_error",vl1.shape[0], vl2.shape[0])
+            #<<DB
+            m = min([ vl1.shape[0], vl2.shape[0] ])
             rend.append(sum((vl1[:m]-vl2[:m])**2)/m)
         if self.collapse:
             return mean( array(rend) )
