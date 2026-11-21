@@ -298,12 +298,12 @@ def af_generator(random, args):
                 prm = [ n for n,_,_,_ in af_generator.arx['parameters'] ]
             pop  = [
                 (p['parameters'] if type(p) is dict else p[1])
-                for r in 'final records unique checkpoint'.split() if r in af_generator.arx
+                for r in 'population final records unique checkpoint'.split() if r in af_generator.arx and len(af_generator.arx[r]) > 0
                 for p in af_generator.arx[r] if not p is None
             ]            
             if len(pop) > af_generator.counter and not prm is None:
                 vect = pop[af_generator.counter]
-                rvec = af_ec2mod( generator_with_resolve_strings(prm_ranges,logscale),prm_ranges )
+                rvec = generator_with_resolve_strings(prm_ranges,logscale)
                 vect = [
                     (vect[prm.index(n[0])] if n[0] in prm else rvec[ni])
                     if type(n) is tuple or type(n) is list else 
@@ -312,7 +312,7 @@ def af_generator(random, args):
                 ]
                 logging.info(f" > a vector #{af_generator.counter:03d} has been read")
                 af_generator.counter += 1 
-                return af_mod2ec(vect,prm_ranges)
+                return vect
             else:
                 logging.error(f"Skip reading: len(pop)={len(pop)} < af_generator.counter={af_generator.counter} or prm={prm} is None")
                 sys.stderr.write(f"\nSkip reading len(pop)={len(pop)} < af_generator.counter={af_generator.counter} or prm={prm} is None\n")
@@ -451,6 +451,58 @@ def af_repoter(population, num_generations, num_evaluations, args):
         logging.info(f" 1:{json.dumps(xpop[0])}")
         logging.info(f" 2:{json.dumps(xpop[1])}")
         logging.info(f" 3:{json.dumps(xpop[2])}")
+
+    
+    checkpointer   = args.get('check_point', None)    
+    if checkpointer:
+        logging.debug(f"Population Check Pointer: {checkpointer.__class__.__name__}")
+        logging.debug(f" > Running")
+        checkpointer(
+            [ p.fitness.fitness   for p in population ],
+            [ p.fitness.values[:] for p in population ],
+            [ p.candidate[:]      for p in population ],
+            args )
+    trace_evol   = args.get("trace_evol",None)
+    if trace_evol:
+        if checkpointer:
+            import os
+            trace_evol_filename,_ = os.path.splitext(checkpointer.filename)
+            trace_evol_filename  += "-evolution.json"
+        elif type(trace_evol) is str:
+            trace_evol_filename   = trace_evol
+        else:
+            trace_evol_filename   = args.get("trace_evol_filename",None)
+        if not trace_evol_filename:
+            logging.warning("Cannot trace evolution: checkpointer is not set, `trace_evol` is not stirng, and argument `trace_evol_filename` is not set either.")
+            return
+
+        trace_evol_period         = args.get("trace_evol_period",100)
+        if num_generations%trace_evol_period != 0:
+            logging.debug(f"Skipping evolution trace {num_generations} % {trace_evol_period} = {num_generations%trace_evol_period} != 0")
+            return
+        try:
+            with open(trace_evol_filename) as fd:
+                j = json.load(fd)
+        except:
+            logging.warning("Rest evolution history")
+            j = []
+        j.append({
+            "generation": num_generations,
+            "population": [
+                {"fitness":p.fitness.values[:], "parameters": p.candidate[:]}
+                for p in population
+            ]
+        })
+        try:
+            with open(trace_evol_filename,'w') as fd:
+                json.dump(j,fd)
+        except BaseException as e:
+            logging.warning(f"Cannot save evolution history into `{trace_evol_filename}` file: {e}")
+        
+        
+            
+            
+
 
 # def af_archiver(random, population, archive, args):
     # logscale = args.get("logscale",False)
