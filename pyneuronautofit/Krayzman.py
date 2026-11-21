@@ -285,15 +285,14 @@ class Krayzman(object):
             self.unmasked_weights += dump['unmasked']
 
 def KAW_evaluator(candidates=[], args={}):
+    from inspyred import ec
     logscale       = args.get("logscale",False)
     norm_evaluator = args.get("norm_evaluator",ec.evaluators.parallel_evaluation_mp)
     use_Pareto     = args.get('use_Pareto', False)
     adap_intervals = args.get('adap_int',0)
-    krayzman_th    = args.get('krayzman_threshold', 0.05)
+    threshold      = args.get('krayzman_threshold', 0.05)
     normspace      = args.get('normspace', False)
-
     adap_size      = args.get("adaptation_size", None )
-    threshold      = args.get("threshold"      , 0.05 )
     reinit         = args.get("reinit_after"   , 40   )
     varlimit       = args.get("variance_cutoff", 1e-9 )
     
@@ -301,15 +300,17 @@ def KAW_evaluator(candidates=[], args={}):
     fitness        = [ Krayzman(f) for f in fitness ]
 
     if not hasattr(KAW_evaluator,"reinit_counter"):
-        KAW_evaluator.reinit_counter = reinit
-        KAW_evaluator.accumulator    = []
-        KAW_evaluator.logger         = logging.get_logger("KAW_evaluator")
-        
-
-
-    KAW_evaluator.accumulator += fitness[:]
-    
-    if adap_size is None:
+        KAW_evaluator.reinit_counter = 0
+        KAW_evaluator.accumulator    = fitness[:]
+        KAW_evaluator.logger         = logging.getLogger("KAWev")
+        KAW_evaluator.logger.info(f"Initial weights set")
+        KAW_evaluator.accumulator[0].update_weights(
+            KAW_evaluator.accumulator, 
+            init=True, 
+            variance_cutoff=varlimit
+        )
+    elif adap_size is None:
+        KAW_evaluator.accumulator += fitness[:]
         if KAW_evaluator.reinit_counter >= reinit:
             KAW_evaluator.logger.info(f"Reinit weights after {KAW_evaluator.reinit_counter} updates")
             KAW_evaluator.accumulator[0].update_weights(
@@ -321,7 +322,7 @@ def KAW_evaluator(candidates=[], args={}):
             KAW_evaluator.accumulator.clear()
         else:
             KAW_evaluator.logger.info(f"Incrimental update #{KAW_evaluator.reinit_counter}  hreshold = {threshold}")
-            accumulator[0].update_weights(
+            KAW_evaluator.accumulator[0].update_weights(
                 KAW_evaluator.accumulator, 
                 init=False,
                 threshold = threshold,
@@ -330,11 +331,12 @@ def KAW_evaluator(candidates=[], args={}):
             KAW_evaluator.reinit_counter += 1
             KAW_evaluator.accumulator.clear()
     else:
-        if len(KAW_evaluator.accumulator) < adap_size:
-            KAW_evaluator.logger.info(f"Accumulation phase {len(KAW_evaluator.accumulator)} < {adap_size}")
+        KAW_evaluator.accumulator += fitness[:]
+        if len(KAW_evaluator.accumulator)/len(fitness) < adap_size:
+            KAW_evaluator.logger.info(f"Accumulation phase {len(KAW_evaluator.accumulator)/len(fitness)} < {adap_size}")
         else:
             if KAW_evaluator.reinit_counter >= reinit:
-                KAW_evaluator.logger.info(f"Grand initialization after {KAW_evaluator.reinit_counter} updates with candidates size {len(x.accumulator)}")
+                KAW_evaluator.logger.info(f"Grand initialization after {KAW_evaluator.reinit_counter} updates with candidates size {len(KAW_evaluator.accumulator)}")
                 KAW_evaluator.accumulator[0].update_weights(
                     KAW_evaluator.accumulator,
                     init=True,
@@ -343,7 +345,7 @@ def KAW_evaluator(candidates=[], args={}):
                 KAW_evaluator.reinit_counter  = 0
                 KAW_evaluator.accumulator.clear()
             else:
-                KAW_evaluator.logger.info(f"Incrimental update #{KAW_evaluator.reinit_counter} with candidates size {len(x.accumulator)} and threshold = {threshold}")
+                KAW_evaluator.logger.info(f"Incrimental update #{KAW_evaluator.reinit_counter} with candidates size {len(KAW_evaluator.accumulator)} and threshold = {threshold}")
                 KAW_evaluator.accumulator[0].update_weights(
                     KAW_evaluator.accumulator,
                     init=False,
@@ -353,17 +355,39 @@ def KAW_evaluator(candidates=[], args={}):
                 KAW_evaluator.reinit_counter += 1
                 KAW_evaluator.accumulator.clear()
     
-    weights  = accumulator[0].adaptive_weights[:]
-    unmasked = accumulator[0].unmasked_weights[:]
+    weights  = fitness[0].adaptive_weights[:]
+    unmasked = fitness[0].unmasked_weights[:]
     KAW_evaluator.logger.info(f"> weight   = {weights}")
     KAW_evaluator.logger.info(f"> unmasked = {unmasked}")
     KAW_evaluator.logger.debug("Checking that weights changed through population")
-    for p in args["_ec"].population:
+    for p in args["_ec"].population[::10]:
         if not isinstance(p.fitness,Krayzman):
             KAW_evaluator.logger.warning("there is a individual in the population with not Krayzman fitness: {p}")
             continue
         KAW_evaluator.logger.debug(f" > w={p.fitness.adaptive_weights}, mask={p.fitness.unmasked_weights} v={p.fitness.values} f={p.fitness}")
-        
+    
+    archiver       = args.get('archiver', None)
+    # checkpointer   = args.get('check_point', None)
+    # mpi_active     = args.get('mpi_active',False)
+
+    
+    if archiver:
+        KAW_evaluator.logger.debug(f"Archiver: {archiver.__class__.__name__}")
+        KAW_evaluator.logger.debug(f" > Running")
+        archiver(
+            [ f.fitness for f in fitness],
+            [ f.values  for f in fitness],
+            candidates,
+            args )
+    
+    # if checkpointer and not mpi_active:
+        # KAW_evaluator.logger.debug(f"Check Pointer: {checkpointer.__class__.__name__}")
+        # KAW_evaluator.logger.debug(f" > Running")
+        # checkpointer(
+            # [ f.fitness for f in fitness],
+            # [ f.values  for f in fitness],
+            # candidates,
+            # args )
 
     return fitness
     
