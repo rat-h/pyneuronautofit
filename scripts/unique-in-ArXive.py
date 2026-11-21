@@ -81,7 +81,7 @@ if   fext == ".gz":
         arXive,markers,bvalues,\
         parameters,version,cmd,\
         target,evaluation = read_arxive(fd)
-    print( "==================== DONE")
+    print( " > DONE")
 elif fext == ".json":
     print( "=========================")
     print(f"Reading JSON {args[0]}")
@@ -89,7 +89,7 @@ elif fext == ".json":
         arXive,markers,bvalues,\
         parameters,version,cmd,\
         target,evaluation = read_arxive(fd)
-    print( "==================== DONE")
+    print( " > DONE")
 else:
     sys.stderr.write(f"Unknown input file extension {fext}")
     exit(1)
@@ -119,34 +119,35 @@ if opt.weight:
     UniqueArXive = [ (w,s,v) for w,(s,v) in zip(wscores,UniqueArXive) ]
     recv = 3
 elif opt.fas:
-    print("No scaler just fitness")
+    print( " > No scaler just fitness")
     UniqueArXive =  [ (s,s,v) for s,v in UniqueArXive ]
     recv = 3
 elif opt.sas:
-    print("Computing sum sores scales")
+    print( " > Computing sum sores scales")
     UniqueArXive =  [ (sum(s),s,v) for s,v in UniqueArXive ]
     recv = 3
 elif opt.smn:
-    print("Computing max scales")
+    print( " > Computing max scales")
     scores  =  array([ s for s,v in UniqueArXive ]) 
     maxup = amax(scores,axis=0)
     maxup[where(maxup<1e-12)] = 1
-    print("Max scales")
-    print(f"  > {maxup.tolist()}")
+    print( " > Max scales")
+    print(f"   > {maxup.tolist()}")
     UniqueArXive =  [ (sum(s/maxup),s,v) for s,v in UniqueArXive ]
-    print( "==================== DONE")
+    print( "   > DONE")
 
 if opt.sort: UniqueArXive = sorted(UniqueArXive)
 
-print(len(arXive),"=>",len(UniqueArXive))
+print(' > ', len(arXive),"=>",len(UniqueArXive))
 
 if len(args) > 1:
     outputfilename = args[1]
 else:
-	outputfilename = args[0].replace("arXive","unique").replace("final","unique")
+    outputfilename = args[0].replace("arXive","unique").replace("final","unique")
+print(f"Saving into {outputfilename}")
 
 fname, fext = os.path.splitext(outputfilename)
-
+print(f" > extention {fext}")
 def saveJson(fd):
     fd.write('{\n')
     fd.write("\t\"markers\"   :" + json.dumps(markers)   +",\n")
@@ -163,12 +164,15 @@ def saveJson(fd):
             
 
 if   fext == ".json":
+    print( " > JSON")
     with open(outputfilename,"w") as fd:
         saveJson(fd)
-elif fext == ".gz":
+elif fext == ".gz" or fext == ".gzip":
+    print( " > GZIP")
     with gzip.open(outputfilename,"wt") as fd:
         saveJson(fd)
 elif fext == ".npz":
+    print( " > NUMPY")
     UniqueArXive = [ (w,array(s),array(v)) for w,s,v in UniqueArXive ] if recv == 3 else [ (array(s),array(v)) for s,v in UniqueArXive ]
     savez(outputfilename,
         markers = markers,
@@ -187,3 +191,5 @@ if not opt.rmap is None:
         if not targets is None: fd.write("Targets,       ,"+",".join([f"{o:0.6g}" for o in targets])+"\n")
         for i,(w,s,v) in enumerate(UniqueArXive):
             fd.write(f"{i},{w:0.2f},"+",".join([f"{o:0.6g}" for o in s])+"\n")
+
+print( "=========================")
