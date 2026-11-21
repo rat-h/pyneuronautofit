@@ -42,18 +42,18 @@ EC_Algorithm.add_option('-U', "--scales-update",      dest="update",default=10.,
     # help="Enables masking in Krayzman's multiobjective optimization") 
 EC_Algorithm.add_option("-y", "--norm-space",         dest="norms",  default=False,          action="store_true",
     help="normalize space under the curve")
-EC_Algorithm.add_option("-H", "--hold-weights-normalization",dest="holdKGAweights",  default=False,          action="store_true",
-    help="hold weights without normalization in iteration procedure (default disable)")
+EC_Algorithm.add_option("-H", "--Reinit-weights",     dest="wreinit",default=100,              type='int',
+    help="Reinit Kyazman's weights after #N weigh adaptations (default 100)")
 EC_Algorithm.add_option("-b", "--bound-Krayzman-weights",dest="boundKGA",  default=None,      type='float',
     help="bound weights by [1/x,x] (default disable)")
 EC_Algorithm.add_option("-M",   "--mutation-rate",    dest="mrate",  default=0.1,            type='float',
     help="Basic mutation rate (default 10%%)")
 EC_Algorithm.add_option("-S","--adaptive-mutation-slope",  dest="amslope",default=0.06,            type='float',
     help="Adaptive mutation slope")
-EC_Algorithm.add_option("-Q","--v-dvdt-hist-size",    dest="vpvsize",   default=12,              type='int',
-    help="v dv/dt histogram size (default 12)")
-EC_Algorithm.add_option("-J", "--inJect-elits",       dest="enableDelits",  default=False,          action="store_true",
-    help="enable dynamic elits")
+EC_Algorithm.add_option("-R","--truncation-Replacement",    dest="truncrep",default=False,          action="store_true",
+    help="Use truncation replacement instead of generational. Elites are ignored in this replacement")
+EC_Algorithm.add_option("--trace-Evolution",         dest="trace_evl"   ,default=None,      type='str',
+    help="Trace evolution every 100 generations and save results into a JSON file")
 
 oprs.add_option_group(EC_Algorithm)
 
@@ -79,6 +79,8 @@ Model_Cond.add_option("-e", "--collapse-diff",      dest="cdiff",   default=Fals
     help="Collapse difference between a model and data in a vector with size = number of tests (i.e. for  -m RAMNT the diff vector will be length 5)")
 Model_Cond.add_option("-o", "--smoofing-kernel",    dest="smoothkr",default=100.,            type='float',
     help="size of smoothing kernel in ms (default 20)")
+Model_Cond.add_option("-Q","--v-dvdt-hist-size",    dest="vpvsize",   default=12,              type='int',
+    help="v dv/dt histogram size (default 12)")
 oprs.add_option_group(Model_Cond)    
 
 #RUN
@@ -109,9 +111,9 @@ Run_.add_option(      "--log-archive",         dest="logarx",  default=False,   
     help="record archive into log file")
 Run_.add_option(      "--dry-run",             dest="dryrun",  default=False,           action="store_true",
     help="exit after init everything")
-Model_Cond.add_option("-T", "--sep-threshold", dest="threshold",default=0.8,            type='float',
+Run_.add_option("-T", "--sep-threshold",       dest="threshold",default=0.8,            type='float',
     help="threshold of Theil's U when evolution stops (default 0.8)")
-Model_Cond.add_option(      "--num-pca"     , dest="npca",     default=6,               type='int',
+Run_.add_option(      "--num-pca"     ,        dest="npca",     default=6,               type='int',
     help="number of PCA components for clustering. should be less than number of parameter (default 6)")
 
 oprs.add_option_group(Run_) 
@@ -231,10 +233,14 @@ try:
     from .autofit    import *
     from .runandtest import RunAndTest
     from .evaluator  import Evaluator
+    from .arXiver    import charly as CheckPointCharly
+    from .arXiver    import arXiver as ArXiver
 except:
     from pyneuronautofit.autofit    import *
     from pyneuronautofit.runandtest import RunAndTest
     from pyneuronautofit.evaluator  import Evaluator
+    from pyneuronautofit.arXiver    import charly as CheckPointCharly
+    from pyneuronautofit.arXiver    import arXiver
     
 for _lh_ in logheader: logging.info( _lh_ )
 logging.info(f'Fitting to                          : {target}')
@@ -255,29 +261,33 @@ vl = e.diff(e,marks=True)
 vm = "".join([m for m,v in vl])
 vv = e.scores()
 vl = len(vl)
-with open(arXive,'w') as fd:
-    fd.write('{\n')
-    fd.write("\t\"markers\"   :" + json.dumps(list(vm))          +",\n")
-    fd.write("\t\"bvalues\"   :" + json.dumps(vv)                +",\n")
-    fd.write("\t\"parameters\":" + json.dumps(param_nslh)        +",\n")
-    fd.write("\t\"version\"   :" + json.dumps(getversion())      +",\n")
-    fd.write("\t\"target\"    :" + json.dumps(target)            +",\n")
-    fd.write("\t\"evaluation\":" + json.dumps({
-                        'mode'           : opt.emode,
-                        'mask'           : opt.emask,
-                        'prespike'       : opt.eleft,
-                        'postspike'      : opt.erght,
-                        'spikethreshold' : opt.ethsh,
-                        'spikecount'     : opt.espc,
-                        'collapse_tests' : opt.cdiff,
-                        'spikeweight'    : opt.spwtgh,
-                        'smoothingkernel': opt.smoothkr,
-                        'downsampler'    : downsampler,
-                        'vpvsize'        : opt.vpvsize
-                      })         +",\n")
-    
-    fd.write("\t\"cmd\"       :" + json.dumps(" ".join(sys.argv))+",\n")
-    fd.write(f"\t\"records\":[\n")
+
+arXiver = ArXiver(
+    filename   = arXive,
+    algorithm  = opt.algor[0],
+    markers    = list(vm),
+    bvalues    = vv,
+    parameters = param_nslh,
+    version    = getversion(),
+    target     = target,
+    evaluation = e.evalparams,
+    cmd        = " ".join(sys.argv),
+    logscale   = opt.logs
+)
+Charly = CheckPointCharly(
+    chpntrec    , #filename:str,
+    fname       , #fname:str,
+    param_nslh  , #parameters:list,
+    opt.algor[0], #algorithm:str,
+    opt.riter   , #riter:int,
+    opt.logs    , #logscale:bool,
+    e.evalparams, #evalate:dict,
+    target      , #target:str
+    opt.nch     , #checkpoint_print:int=-1
+    opt.dch       #checkpoint_count:int=-1
+)
+
+
 if not Kr_log is None:
     with open(Kr_log,"w")as fd:
         fd.write("{\n")
@@ -293,11 +303,11 @@ logging.info(f' > number of elites in replacement  : {opt.elites}')
 logging.info(f' > Algorithm                        : {algorithms[opt.algor[0]]}')
 logging.info(f' > adapt weights every              : {numWadapPop} generations')
 if opt.algor[0] == 'K':
-    # logging.info(f' > mitigate negative correlation    : {opt.nonegcor}')
-    logging.info(f' > Threshold for Krayzman\'s proc    : {opt.krthr}')
+    logging.info(f' > Replacement                      : ' + ('Truncation' if opt.truncrep else 'Generational') )
+    logging.info(f' > Threshold for Krayzman\'s proc   : {opt.krthr}')
     logging.info(f' > Normlization                     : '+('space' if opt.norms else 'maximum') )
     logging.info(f' > weights are bound by             : {opt.boundKGA}')
-    logging.info(f' > hold-on weights normalization    : {opt.holdKGAweights}')
+    logging.info(f' > Reinit weights every             : {opt.wreinit}')
     # logging.info(f' > masking                          : {opt.kga_mask}')
     logging.info(f' > basic mutation rate              : {opt.mrate}')
     logging.info(f' > adaptive mutation slope          : {opt.amslope}')    
@@ -314,6 +324,7 @@ logging.info(f' > spike zoom                       : {opt.spwtgh}')
 logging.info(f' > collapse vector                  : {opt.cdiff}')
 logging.info(f' > vector length                    : {vl}')
 logging.info(f' > vector components                : {vm}')
+logging.info(f' > smoothing kernel                 : {opt.smoothkr}')
 for c in opt.emode:
     logging.info(r' \-> '+f'{c}                              : {len([ p for p in vm if p==c])}')
    
@@ -377,8 +388,8 @@ def separation_quality(parameters):
     
     This procedure mixed all individual in one array and separate them on the 
     number of cluster as number of fitting procedures. Then it computes
-    Theil's U - uncertainty coefficient of find a given neuron (box) by
-    the cluster into which parameters landed.
+    Theil's U - uncertainty coefficient of find a given neuron (color) by
+    the cluster into which parameters landed (box).
     
     Return a float between 0 - complete mess and 1 - perfect separation
     """
@@ -402,6 +413,7 @@ def separation_quality(parameters):
     return u
 
 def MPI_generation_termination(population, num_generations, num_evaluations, args):
+  
     logging.info(f"=== MPI communication ===")
     samples = [ p.candidate[:] for p in population ]
     try:
@@ -457,438 +469,34 @@ def TCevaluator(candidates, args):
     evalPram   = args.get("evalparams",{})
     evaluator  = e#Evaluator(targetFile,**evalPram)
     fitness    = [ RunAndTest(evaluator,celsius=opt.temp,lock=loglock,logname=fname+timestamp)(params=list2dict(af_ec2mod(p,prm_ranges) if opt.logs else p,prm_ranges)) for p in candidates]
-    # use_Pareto = args.get('use_Pareto', False)
-    # if use_Pareto:
-        # fitness   = [ ec.emo.Pareto(f) for f in fitness ]
     return fitness
 
-def RecArXive(wfitness,fitness,candidates,args):
-    # ----- ArXiving -----
-    algorithm    = args.get("algorithm",'K')
-    logscale     = args.get("logscale",False)
-    param_ranges = args['param_ranges']
-    chprint      = args.get("checkpoint_print",-1)
-    arX_chpoint  = args.get("checkpoint_count",-1)
-
-
-    xpop = sorted([ [w,f,af_ec2mod(c,param_ranges) if logscale else c] for w,f,c in zip(wfitness,fitness,candidates) ])
-    if not hasattr(RecArXive, "chcount"): RecArXive.chcount  = 0
-    else                                : RecArXive.chcount += 1
-    
-    if arX_chpoint > 0:
-        if RecArXive.chcount%arX_chpoint == 0   :
-            mm = args['algorithm'][0] != "N"
-            mpop = \
-                sorted([ 
-                    [ c.fitness if mm else c.fitness.values,af_ec2mod(c.candidate,param_ranges) if logscale else c.candidate] for c in args["_ec"].archive 
-                ])
-            if "checkpoint_file" in args and type(args["checkpoint_file"]) is str:
-                chpntrec = args["checkpoint_file"]
-            with open(chpntrec,"w") as fd:
-                fd.write("{\n\t\"Generation\":"+f"{RecArXive.chcount},\n")
-                fd.write("\t\"parameters\":"+f"{json.dumps(param_ranges)},\n")
-                fd.write("\t\"checkpoint\":[\n")
-                for il,(w,f,p) in enumerate(xpop):
-                    fd.write("\t\t"+json.dumps({"fitness":f, "parameters":p, "weighted-fitness":w })+(",\n" if il < len(xpop)-1 else "\n") )
-                fd.write("\t],\n\t\"Archive\":[\n")
-                for il,(f,p) in enumerate(mpop):
-                    fd.write("\t\t"+json.dumps({"fitness":f, "parameters":p})+(",\n" if il < len(mpop)-1 else "\n") )
-                fd.write("\t]\n}\n")
-            with open(f'{fname}.link','w') as fd:
-                json.dump({
-                    "check point": chpntrec,
-                    "restart counter" : opt.riter
-                },fd, indent=4)
-
-
-    if chprint > 0:
-        if RecArXive.chcount%chprint == 0       : print(json.dumps(xpop)+"\n")
-    
-
-    if "arXive_file" in args and type(args["arXive_file"]) is str:
-        arXive = args["arXive_file"]
-    with open(arXive,"a") as fd:
-        for il,(w,f,p) in enumerate(xpop):
-            fd.write("\t\t"+json.dumps({"fitness":f, "parameters":p, "weighted-fitness":w})+ ",\n")
-
-
-    if algorithm[0] == 'K':
-        krayzman_log  = args.get("krayzman_log",None)
-        if not krayzman_log is None and type(krayzman_log) is str and KrayzmanGA.adap_cnt == 0:
-            with open(krayzman_log,"a")as fd:
-                fd.write("\t\"UPDATE\":"+json.dumps(KrayzmanGA.weights.tolist())+",\n")
-    
-def deNANificator(fitness):
-    noneid = []
-    vsize  = -1
-    for fi,f in enumerate(fitness):
-        if f is None:
-            noneid.append(fi)
-            continue
-        if None in f:
-            noneid.append(fi)
-            continue
-        if vsize < 0 : vsize = len(f)
-        elif vsize != len(f):
-            with loglock:
-                logging.error(f"Vector sizes aren't equal {vsize}!={len(f)} :{fi}")
-                raise RuntimeError(f"Vector sizes aren't equal {vsize}!={len(f)} :{fi}")
-            exit(1)
-    
-    for nid in noneid:
-        fitness[nid] = [nan for i in range(vsize) ]
-    fmax = nanmax( array(fitness) )
-    fitness =[ [fmax*1e3 if isnan(f) else f for f in p] for p in fitness ]
-    return fitness
-    
 def ParetoGA(candidates=[], args={}):
     logscale       = args.get("logscale",False)
     norm_evaluator = args.get("norm_evaluator",ec.evaluators.parallel_evaluation_mp)
-    use_Pareto     = args.get('use_Pareto', False)
     fitness        = norm_evaluator(candidates, args)
-    enable_d_elists= args.get("enable_d_elists",False) 
-    #DB>> TRAP #1
-    fitness = deNANificator(fitness)
-    #TRAP #1 <<DB
-    RecArXive(['P' for _ in fitness],fitness,candidates,args)
-    return [ ec.emo.Pareto(p) for p in fitness ]    
-    
-def KrayzmanGA(candidates=[], args={}):
-    logscale       = args.get("logscale",False)
-    norm_evaluator = args.get("norm_evaluator",ec.evaluators.parallel_evaluation_mp)
-    use_Pareto     = args.get('use_Pareto', False)
-    adap_intervals = args.get('adap_int',0)
-    krayzman_th    = args.get('krayzman_threshold', 0.05)
-    normspace      = args.get('normspace', False)
-    weight_bound   = args.get('weight_bound',None)
-    hold_weights   = args.get('hold_weights', False)
-    vectormarks    = args.get('vecmarks',None)
-    vecvalues      = args.get('vecvalues',None)
-    krayzman_log   = args.get("krayzman_log",None)
-    if type(krayzman_log) is not str: krayzman_log = None
-    enable_d_elists= args.get("enable_d_elists",False) 
+    fitness        = [ ec.emo.Pareto(p) if p is not None and all ([np.isfinite(k) for k in p]) else None for p in fitness ]
+    archiver       = args.get('archiver', None)
+    checkpointer   = args.get('check_point', None)
+    mpi_active     = args.get('mpi_active',False)
 
-    ### Run evaluation
-    fitness        = norm_evaluator(candidates, args)
-    
-    
-    #DB>> TRAP #1
-    fitness = deNANificator(fitness)
-    #TRAP #1 <<DB
-        
-    def mydot(fit,w):
-        wfit = array([ f[KrayzmanGA.masking]*w[KrayzmanGA.masking] for f in fit])
-        return sum(wfit, axis = 1)
-    def resetMASKEDweights(fitness):
-        KrayzmanGA.weights  = var(fitness,axis=0)
-        KrayzmanGA.masking  = where( (isfinite(KrayzmanGA.weights)) * (KrayzmanGA.weights > 1e-9) )[0]
-        # KrayzmanGA.weights[   isnan(KrayzmanGA.weights)    ] = mean(KrayzmanGA.weights)
-        # KrayzmanGA.weights[where(KrayzmanGA.weights < 1e-9)] = mean(KrayzmanGA.weights)
-        KrayzmanGA.weights[KrayzmanGA.masking]  = 1./KrayzmanGA.weights[KrayzmanGA.masking]
-        KrayzmanGA.weights  = KrayzmanGA.weights.T
-        KrayzmanGA.weights[KrayzmanGA.masking] /= \
-            sum(KrayzmanGA.weights[KrayzmanGA.masking])\
-            if normspace else\
-             amax(KrayzmanGA.weights[KrayzmanGA.masking])
-        # wfitness = dot(fitness[:,KrayzmanGA.masking],KrayzmanGA.weights[KrayzmanGA.masking])
-        wfitness = mydot(fitness,KrayzmanGA.weights)
-        return wfitness
-    def computerMASKEDcorrelation(acfit,wacfit):
-        corrs              = array([ corrcoef(f,wacfit)[0,1] if m in KrayzmanGA.masking else nan for m,f in enumerate(acfit.T) ])
-        KrayzmanGA.masking = array([ i for i in KrayzmanGA.masking if isfinite(corrs[i])])
-        with loglock:
-            logging.debug(f"MASK:{corrs} {corrs.shape}")
-            logging.debug(f"CORRS:{KrayzmanGA.masking} {KrayzmanGA.masking.shape}")
-        m2m                = amin(corrs[KrayzmanGA.masking])/amax(corrs[KrayzmanGA.masking])
-        return corrs,m2m
-    def computerMASKEDfittnes(fitness,acfit=None):
-        if acfit is None:
-            testvar = var(fitness,axis=0)
-            KrayzmanGA.masking = array([ i for i in KrayzmanGA.masking if isfinite(testvar[i]) and testvar[i] > 1e-9 ])
-            #DB>>
-            with loglock:
-                logging.debug(f"VARIANCE:{testvar.tolist()}")
-                logging.debug(f"MASSK   :{KrayzmanGA.masking} {KrayzmanGA.masking.shape}")
-            #<<DB
-            #return dot(fitness[:,KrayzmanGA.masking],KrayzmanGA.weights[KrayzmanGA.masking])
-            return mydot(fitness,KrayzmanGA.weights)
-        else:
-            # return (
-                # dot(fitness[:,KrayzmanGA.masking],KrayzmanGA.weights[KrayzmanGA.masking]),
-                # dot(  acfit[:,KrayzmanGA.masking],KrayzmanGA.weights[KrayzmanGA.masking])
-            # )
-            return (
-                mydot(fitness,KrayzmanGA.weights),
-                mydot(  acfit,KrayzmanGA.weights)
-            )
-    
-    
-    
-    fitness  = array(fitness)
-        
-
-    if not hasattr(KrayzmanGA,'adap_cnt'):KrayzmanGA.adap_cnt = 0
-    if not hasattr(KrayzmanGA,'adap_fit'):KrayzmanGA.adap_fit = []
-    if not hasattr(KrayzmanGA,'masking' ):KrayzmanGA.masking  = array([ i for i in range(fitness.shape[1]) ])
-    if not hasattr(KrayzmanGA,'weights' ):
-        with loglock:
-            logging.info("Generate new weights")
-        wfitness = resetMASKEDweights(fitness)
-        if not krayzman_log is None:
-            with open(krayzman_log,'a') as fd:
-                fd.write("\t\"SET\":{\n\t\t\"VARIANCE\":"+json.dumps(var(fitness,axis=0).tolist())+\
-                ",\n\t\t\"MASKS\":"+json.dumps(KrayzmanGA.masking.tolist())+\
-                ",\n\t\t\"WEIGHTS\":"+json.dumps(KrayzmanGA.weights.tolist())+"\n\t},\n" )
-        RecArXive(wfitness.tolist(),fitness.tolist(),candidates,args)
-        if enable_d_elists:
-            args['_ec']._kwargs['num_elites'] = args.get('dynamics_elites',0)
-        return wfitness.tolist()
-
-    if enable_d_elists:
-        args['_ec']._kwargs['num_elites'] = args.get('dynamics_elites',0)
-
-    #DB>> TRAP #2
-    try:
-        wfitness = computerMASKEDfittnes(fitness)
-    except BaseException as e:
-        logging.error(f"Cannot compute masked fitness! fitness={fitness}, mask={KrayzmanGA.masking}:{e}")
-        raise RuntimeError(f"Cannot compute masked fitness! fitness={fitness}, mask={KrayzmanGA.masking}:{e}")
-    try:
-        if any(isnan(wfitness)):
-            fmax = amax(wfitness[~isnan(wfitness)])
-            with loglock:
-                logging.info("Fitness is nan. Skip adjustment")
-            return [ fmax*1e3 if isnan(f) else f for f in wfitness ]
-    except:
-        logging,error(f"TRAP #2, we should NOT be here: fitness = {fitness}")
-        raise RuntimeError(f"TRAP #2, we should NOT be here: fitness = {fitness}")
-        exit(1)
-    #TRAP #2 <<DB
-    corrs = zeros(KrayzmanGA.weights.shape[0])
-    KrayzmanGA.adap_fit += fitness.tolist()
-    KrayzmanGA.adap_cnt += 1
-    if KrayzmanGA.adap_cnt < adap_intervals:
-        with loglock:
-            logging.info( " > Fitness Acucmulation")
-            logging.info(f" |-> Iteration    : {KrayzmanGA.adap_cnt} of {adap_intervals}")
-            logging.info(f" |-> Fitness size : {len(KrayzmanGA.adap_fit)}")
-        wfitness = computerMASKEDfittnes(fitness)
-    else:
-        finiteweights       = KrayzmanGA.weights[isfinite(KrayzmanGA.weights)]
-        minweight           = amin(finiteweights[where(finiteweights > 0.)])/2
-        KrayzmanGA.weights  = array([KrayzmanGA.weights[i] if i in KrayzmanGA.masking else (minweight*(0.5+random.rand()))  for i in range(fitness.shape[1]) ])
-        KrayzmanGA.masking  = array([ i for i in range(fitness.shape[1]) ])
-        acfit     = array(KrayzmanGA.adap_fit)
-        wacfit    = computerMASKEDfittnes(acfit)
-        corrs,m2m = computerMASKEDcorrelation(acfit,wacfit)
-        old_m2m   = m2m*2.
-        cnt,st    = 0, time.time()
-        with loglock:
-            logging.info( " > Weights adaptation")
-            logging.info(f" |-> BEFORE: mincor={amin(corrs[KrayzmanGA.masking]):0.6g} maxcor={amax(corrs[KrayzmanGA.masking]):0.6g} old={old_m2m:0.6g} m/m={m2m:0.6g} cnt={cnt:03d}")
-        if not krayzman_log is None:
-            with open(krayzman_log,'a') as fd:
-                fd.write("\t\"ADAPTATION\":{\n\t\t\"FITNESS\":"+json.dumps(acfit.tolist())+",\n")
-
-        while m2m  < krayzman_th:
-            if enable_d_elists:
-                args['_ec']._kwargs['num_elites'] = 0
-
-            # if any(corrs < 0.) and nonegcor:
-                # ncorid          = where((corrs < 0.)*(KrayzmanGA.weights<1e3 ))[0]
-                # if not krayzman_log is None:
-                    # with open(krayzman_log,'a') as fd:
-                        # fd.write("\t\"NEGATIVE\":{\t\t\"CORRELATION\":"+json.dumps(corrs.tolist())+",\n\t\t\"WEIGHTS\":"+json.dumps(KrayzmanGA.weights.tolist())+"\n\t},\n" )
-                # KrayzmanGA.weights[ncorid] = KrayzmanGA.weights[ncorid]*(1+2./float(acfit.shape[1]))
-            # else:
-            if weight_bound is None:
-                upwghid = KrayzmanGA.masking
-                dnwghid = KrayzmanGA.masking
-            else:
-                upwghid         = KrayzmanGA.masking[where(KrayzmanGA.weights[KrayzmanGA.masking]>1/weight_bound)]
-                dnwghid         = KrayzmanGA.masking[where(KrayzmanGA.weights[KrayzmanGA.masking]<weight_bound )]
-            upmaxid,dnminid = argmax(corrs[upwghid]),argmin(corrs[dnwghid])
-            if not krayzman_log is None:
-                with open(krayzman_log,'a') as fd:
-                    fd.write("\t\t\"ITERATION\":{"+\
-                    " \n\t\t\t\"MIN COR\":"+json.dumps([float(corrs[dnwghid[dnminid]]),float(KrayzmanGA.weights[dnwghid[dnminid]]),int(dnminid),dnwghid.tolist()])+\
-                    ",\n\t\t\t\"MAX COR\":"+json.dumps([float(corrs[upwghid[upmaxid]]),float(KrayzmanGA.weights[upwghid[upmaxid]]),int(upmaxid),upwghid.tolist()])+\
-                    ",\n\t\t\t\"CORRELATION\":"+json.dumps(corrs.tolist())+
-                    ",\n\t\t\t\"MASKS\":"+json.dumps(KrayzmanGA.masking.tolist()) +\
-                    ",\n\t\t\t\"WEIGHTS\":"+json.dumps(KrayzmanGA.weights.tolist())+\
-                    ",\n\t\t\t\"FITNESS\":"+json.dumps(wacfit.tolist()) )
-            KrayzmanGA.weights[dnwghid[dnminid]] *= 1+2./float(acfit.shape[1])
-            KrayzmanGA.weights[upwghid[upmaxid]] *= 1-1./float(acfit.shape[1])
-            if not krayzman_log is None:
-                with open(krayzman_log,'a') as fd:
-                    fd.write(",\n\t\t\t\"UPDATE\":"+json.dumps(KrayzmanGA.weights.tolist())+"\n\t\t},\n" )
-            #KrayzmanGA.weights /= amax(KrayzmanGA.weights)
-            if not hold_weights:
-                KrayzmanGA.weights[KrayzmanGA.masking] /= \
-                    sum(KrayzmanGA.weights[KrayzmanGA.masking])\
-                    if normspace else\
-                    amax(KrayzmanGA.weights[KrayzmanGA.masking])
-            
-            wfitness,wacfit          = computerMASKEDfittnes(fitness,acfit)
-            old_m2m                  = m2m
-            corrs,m2m                = computerMASKEDcorrelation(acfit,wacfit)
-            
-            if cnt >= 299 or time.time()-st > 120:
-                with loglock:
-                    logging.info(" |-> RESET : Weights are not converging: regenerate new weights")
-                KrayzmanGA.masking  = array([ i for i in range(fitness.shape[1]) ])
-                wfitness            = resetMASKEDweights(acfit)
-                corrs,m2m           = computerMASKEDcorrelation(acfit,wacfit)
-                with loglock:
-                    logging.info(f" |-> NEW  : mincor={amin(corrs[KrayzmanGA.masking]):0.6g} maxcor={amax(corrs[KrayzmanGA.masking]):0.6g} m/m={m2m:0.6g} cnt={cnt:03d} time={time.time()-st}s")
-                KrayzmanGA.adap_fit = []
-                KrayzmanGA.adap_cnt = 0
-                RecArXive(wfitness.tolist(),fitness.tolist(),candidates,args)
-                if not krayzman_log is None:
-                    with open(krayzman_log,'a') as fd:
-                        fd.write("\t\t\"RESET\":{"+\
-                        " \n\t\t\t\"MASKS\":"+json.dumps(KrayzmanGA.masking.tolist())+\
-                        ",\n\t\t\t\"WEIGHTS\":"+json.dumps(KrayzmanGA.weights.tolist())+"\n\t\t}\n\t},\n" )
-                return wfitness.tolist()
-            if old_m2m >= m2m: cnt += 1
-            elif cnt   >  0  : cnt -= 1
-        if hold_weights:
-            with loglock:
-                logging.info(f" |-> PRENORM: mincor={amin(corrs[KrayzmanGA.masking]):0.6g} maxcor={amax(corrs[KrayzmanGA.masking]):0.6g} old={old_m2m:0.6g} m/m={m2m:0.6g} cnt={cnt:03d} time={time.time()-st}s")
-            KrayzmanGA.weights[KrayzmanGA.masking] /= \
-                sum(KrayzmanGA.weights[KrayzmanGA.masking])\
-                if normspace else\
-                amax(KrayzmanGA.weights[KrayzmanGA.masking])
-            wfitness,wacfit          = computerMASKEDfittnes(fitness,acfit)
-            old_m2m                  = m2m
-            corrs,m2m                = computerMASKEDcorrelation(acfit,wacfit)
-        
-        with loglock:
-            logging.info(f" |-> AFTER: mincor={amin(corrs[KrayzmanGA.masking]):0.6g} maxcor={amax(corrs[KrayzmanGA.masking]):0.6g} old={old_m2m:0.6g} m/m={m2m:0.6g} cnt={cnt:03d} time={time.time()-st}s")
-
-        if not krayzman_log is None:
-            with open(krayzman_log,'a') as fd:
-                fd.write("\t\t\"COMPLETE\":{\n\t\t\t\"CORRELATION\":"+json.dumps(corrs.tolist())+\
-                ",\n\t\t\t\"MASKS\":"+json.dumps(KrayzmanGA.masking.tolist())+\
-                ",\n\t\t\t\"WEIGHTS\":"+json.dumps(KrayzmanGA.weights.tolist())+"\n\t\t}\n\t},\n" )
-        KrayzmanGA.adap_fit = []
-        KrayzmanGA.adap_cnt = 0
-
-    with loglock:
-        logging.info( " > Current weights, correlation, [ fitness ], target")    
-        for z,(m,V, w,v,f,c) in enumerate(zip(vectormarks,vecvalues,KrayzmanGA.weights,wfitness,fitness.T,corrs) ):
-            tw,tc,tfmin,tfmean,tfmax = f"{w:0.6g}", f"{c:0.6g}", f"{amin(f):0.6g}", f"{mean(f):0.6g}", f"{amax(f):0.6g}"
-            logging.info(r" \-> "+f"{m} : "+("ON " if z  in KrayzmanGA.masking else "OFF")+f" : {tw:<15s} , {tc:<15s} : [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ] : {V:0.6g}")
-            logging.debug(f"  `-> {f.tolist()}")
-            
-
-    #DB>>
-    # wjs = json.dumps([fitness.tolist(), weights.tolist(), wfitness.tolist()])
-    # logging.debug( wjs )
-    #<<DB
-    RecArXive(wfitness.tolist(),fitness.tolist(),candidates,args)
-
-    return wfitness.tolist()
-    
-#################################################
-def MaxNormalization(candidates=[], args={}):
-    
-    logscale       = args.get("logscale",False)
-    norm_evaluator = args.get("norm_evaluator",ec.evaluators.parallel_evaluation_mp)
-    use_Pareto     = args.get('use_Pareto', False)
-    adap_intervals = args.get('adap_int',0)
-    vectormarks    = args.get('vecmarks',None)
-    vecvalues      = args.get('vecvalues',None)
-    fitness        = norm_evaluator(candidates, args)
-    
-    
-    #DB>> TRAP #1
-    fitness = deNANificator(fitness)    
-    #TRAP #1 <<DB
-    fitness  = array(fitness)
-
-    if not hasattr(MaxNormalization,'adap_cnt'):MaxNormalization.adap_cnt = 0
-    if not hasattr(MaxNormalization,'adap_fit'):MaxNormalization.adap_fit = []
-    if not hasattr(MaxNormalization,'scalers' ):MaxNormalization.scalers  = ones(len(vectormarks))
+    if archiver:
+        archiver(
+            [ f.fitness if f is not None else None for f in fitness],
+            [ f.values  if f is not None else None for f in fitness],
+            candidates,
+            args )
+    if checkpointer and not mpi_active:
+        checkpointer(
+            [ f.fitness if f is not None else None for f in fitness],
+            [ f.values  if f is not None else None for f in fitness],
+            candidates,
+            args )
 
 
-    args['_ec']._kwargs['num_elites'] = args.get('dynamics_elites',0)
-
-    #DB>> TRAP #2
-    wfitness = sum(fitness/MaxNormalization.scalers, axis = 1)
-    try:
-        if any(isnan(fitness)):
-            fmax = amax(wfitness[~isnan(wfitness)])
-            logging.info("Fitness is nan. Skip adjustment")
-            return [ fmax*1e3 if isnan(f) else f for f in wfitness ]
-    except:
-        logging,error(f"TRAP #2 in MaxNormalization, we should NOT be here: fitness = {fitness}")
-        raise RuntimeError(f"TRAP #2 in MaxNormalization, we should NOT be here: fitness = {fitness}")
-        exit(1)
-    #TRAP #2 <<DB
-    MaxNormalization.adap_fit += fitness.tolist()
-    MaxNormalization.adap_cnt += 1
-    if MaxNormalization.adap_cnt < adap_intervals:
-        logging.info( " > Max scaling : Fitness Acucmulation")
-        logging.info(f" |-> Iteration    : {MaxNormalization.adap_cnt} of {adap_intervals}")
-        logging.info(f" |-> Fitness size : {len(MaxNormalization.adap_fit)}")
-    else:
-        MaxNormalization.scalers    = amax( array(MaxNormalization.adap_fit), axis = 0 )
-        MaxNormalization.scalers[where(MaxNormalization.scalers<1e-12)] = 1.
-        KrayzmanGA.adap_fit = []
-        KrayzmanGA.adap_cnt = 0
-        args['_ec']._kwargs['num_elites'] = 0
-
-    wfitness = sum(fitness/MaxNormalization.scalers, axis = 1)
-    #DB>> TRAP #3
-    if any( isnan(wfitness) ):
-        logging.error(f"TRAP #3 in MaxNormalization, Hit NaN on normalization {wfitness.tolist()}: scalers: {MaxNormalization.scalers.tolist()}")
-        raise RuntimeError(f"TRAP #3 in MaxNormalization, Hit NaN on normalization {wfitness.tolist()}: scalers: {MaxNormalization.scalers.tolist()}")
-        exit(1)
-    #TRAP #3 << DB
-    sfitness = fitness/MaxNormalization.scalers
-    logging.info( " > Max scaling : Current scaler, [ scaled fitness ][ fitness ], target")
-    if not vectormarks is None:
-        if vecvalues is None:
-            for m,w,f,s in zip(vectormarks,MaxNormalization.scalers,fitness.T,sfitness.T):
-                tw,tfmin,tfmean,tfmax = f"{w:0.6g}", f"{amin(f):0.6g}", f"{mean(f):0.6g}", f"{amax(f):0.6g}"
-                tsmin,tsmean,tsmax = f"{amin(s):0.6g}", f"{mean(s):0.6g}", f"{amax(s):0.6g}"
-                logging.info(r" \-> "+f"{m} : {tw:<15s} : [ {tsmin:<15s}, {tsmean:<15s}, {tsmax:<15s} ] [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ]")
-                logging.debug(f"  `-> {f.tolist()}")
-        else:
-            for m,V, w,f,s in zip(vectormarks,vecvalues,MaxNormalization.scalers,fitness.T,sfitness.T):
-                tw,tfmin,tfmean,tfmax = f"{w:0.6g}", f"{amin(f):0.6g}", f"{mean(f):0.6g}", f"{amax(f):0.6g}"
-                tsmin,tsmean,tsmax = f"{amin(s):0.6g}", f"{mean(s):0.6g}", f"{amax(s):0.6g}"
-                logging.info(r" \-> "+f"{m} : {tw:<15s} : [ {tsmin:<15s}, {tsmean:<15s}, {tsmax:<15s} ] [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ] : {V:0.6g}")
-                logging.debug(f"  `-> {f.tolist()}")
-            
-    else:
-        if vecvalues is None:
-            for w,f,s in zip(MaxNormalization.scalers,fitness.T,sfitness.T):
-                tw,tfmin,tfmean,tfmax = f"{w:0.6g}", f"{amin(f):0.6g}", f"{mean(f):0.6g}", f"{amax(f):0.6g}"
-                tsmin,tsmean,tsmax = f"{amin(s):0.6g}", f"{mean(s):0.6g}", f"{amax(s):0.6g}"
-                logging.info(r" \->  "+f"{tw:<15s} : [ {tsmin:<15s}, {tsmean:<15s}, {tsmax:<15s} ] [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ]")
-                logging.debug(f"  `-> {f.tolist()}")
-        else:
-            for V,w,f,s in zip(vecvalues,MaxNormalization.scalers,fitness.T,sfitness.T):
-                tw,tv,tfmin,tfmean,tfmax = f"{w:0.6g}", f"{amin(f):0.6g}", f"{mean(f):0.6g}", f"{amax(f):0.6g}"
-                tsmin,tsmean,tsmax = f"{amin(s):0.6g}", f"{mean(s):0.6g}", f"{amax(s):0.6g}"
-                logging.info(r" \->  "+f"{tw:<15s} : [ {tsmin:<15s}, {tsmean:<15s}, {tsmax:<15s} ] [ {tfmin:<15s}, {tfmean:<15s}, {tfmax:<15s} ] : {V:0.6g}")
-                logging.debug(f"  `-> {f.tolist()}")
-    logging.info( " > Max scaling : Current scaled fitness")
-    for f0,f1,f2,f3 in zip(wfitness[:-3:4],wfitness[1:-2:4],wfitness[2:-1:4],wfitness[3::4]):
-        logging.info(r" \->  "+f"{f0:0.3f} {f1:0.3f} {f2:0.3f} {f3:0.3f}")
-
-    #DB>>
-    # wjs = json.dumps([fitness.tolist(), weights.tolist(), wfitness.tolist()])
-    # logging.debug( wjs )
-    #<<DB
-    RecArXive(wfitness.tolist(),fitness.tolist(),candidates,args)
-
-    return wfitness.tolist()
+    return fitness
     
 
-#################################################
     
 ea = ec.emo.NSGA2(rnd()) if opt.algor[0] == 'N' else ec.GA(rnd())
 
@@ -897,11 +505,14 @@ ea.variator = [af_crossover, af_mutation]
 ea.terminator = MPI_generation_termination if len(args) > 1 else ec.terminators.generation_termination
 
 if   opt.algor[0]=='N': algor = ParetoGA
-elif opt.algor[0]=='M': algor = MaxNormalization
-elif opt.algor[0]=='K': algor = KrayzmanGA
+elif opt.algor[0]=='K':
+    from pyneuronautofit.Krayzman import KAW_evaluator
+    algor = KAW_evaluator
+    if opt.truncrep:
+        ea.replacer = ec.replacers.truncation_replacement
 else:
-    logging.error(f"Unknow algorithm {opt.algor}. Should be K, N, M, or P")
-    raise BaseException(f"Unknow algorithm {opt.algor}. Should be K, N, M, or P")
+    logging.error(f"Unknow algorithm {opt.algor}. Should be K or N")
+    raise BaseException(f"Unknow algorithm {opt.algor}. Should be K or N")
 
     
 final_pop = ea.evolve(generator          = af_generator,
@@ -909,12 +520,11 @@ final_pop = ea.evolve(generator          = af_generator,
                       algorithm          = opt.algor[0],
                       evaluator          = algor,
                       krayzman_log       = Kr_log,
-                      # krayzman_nonegcor  = opt.nonegcor,
                       krayzman_threshold = opt.krthr,
-                      adap_int           = numWadapPop,
+                      adap_int           = opt.wreinit,
+                      adaptation_size    = numWadapPop,
                       normspace          = opt.norms,
                       weight_bound       = opt.boundKGA,
-                      hold_weights       = opt.holdKGAweights,
                       mutation_rate      = opt.mrate,
                       adaptive_mutation_slope = opt.amslope,
                       vecmarks           = vm,
@@ -931,27 +541,15 @@ final_pop = ea.evolve(generator          = af_generator,
                       max_evaluations    = opt.ngn*(opt.psz+opt.elites),
                       max_generations    = opt.ngn,
                       num_elites         = opt.elites,
-                      dynamics_elites    = opt.elites,
-                      enable_d_elists    = opt.enableDelits,
-                      checkpoint_file    = chpntrec,
-                      checkpoint_print   = opt.nch,
-                      checkpoint_count   = opt.dch,
-                      arXive_file        = arXive,
                       expTarget          = target,
                       logpop             = opt.logpop,
                       logarx             = opt.logarx,
-                      evalparams         = {
-                        'mode'           : opt.emode,
-                        'mask'           : opt.emask,
-                        'prespike'       : opt.eleft,
-                        'postspike'      : opt.erght,
-                        'spikethreshold' : opt.ethsh,
-                        'spikecount'     : opt.espc,
-                        'collapse_tests' : opt.cdiff,
-                        'spikeweight'    : opt.spwtgh,
-                        'downsampler'    : downsampler,
-                        'vpvsize'        : opt.vpvsize
-                      })
+                      evalparams         = e.evalparams,
+                      archiver           = arXiver,
+                      check_point        = Charly,
+                      trace_evol         = otp.trace_evl,
+                      mpi_active         = len(args) > 1
+                      )
                           
 final_pop = ea.population
 xpop = sorted(
@@ -984,11 +582,7 @@ with open(finalrec,'w') as fd:
         fd.write("\t\t"+json.dumps({'fitness':f, 'sours':s, 'parameters':p})+",\n")
     fd.write("\t\tnull\n\t]\n}\n")
 
-with open(arXive,'a') as fd:
-    fd.write("\t\tnull\n\t]\n}\n")
-if not Kr_log is None:
-    with open(Kr_log,"a")as fd:
-        fd.write("\tnull\n}\n")
+
 
 logging.info("DONE")
 # os.system(f'gzip -9 {finalrec} {chpntrec} {arXive}')
