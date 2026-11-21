@@ -38,9 +38,12 @@ class RunAndTest():
         self.N         = len(self.eval.TestCurr)
         self.dt        = dt
         self.lock      = lock
-        self.logger    = "RanAndTest.log" if logname is None else (logname+f"-RunAndTest-{os.getpid():09d}.log")
-        self.logger    = "threadlog/"+self.logger
         self.loglevel  = loglevel
+        if self.lock:
+            self.logger    = "RanAndTest.log" if logname is None else (logname+f"-RunAndTest-{os.getpid():09d}.log")
+            self.logger    = "threadlog/"+self.logger
+        else:
+            self.logger    = logging.getLogger("run-and-test")
         if simulator == "neuron":
             self.__sim_run__ = self.__nrn_run__
         
@@ -199,13 +202,14 @@ def ReadArXive(fname,selection):
             bvalues    = arx['bvalues']    if 'bvalues'    in arx else None
             parameters = arx['parameters'] if 'parameters' in arx else None
             target     = arx['target']     if 'target'     in arx else None
-            evaluation = arx['evaluation'] if 'evaluation' in arx else None
+            evaluation = arx['evaluation'] if 'evaluation' in arx else (\
+                         arx['evaluate']   if 'evaluate'   in arx else None)
             version    = arx['version']    if 'version'    in arx else None
             cmd        = arx['cmd']        if 'cmd'        in arx else None
 
             arXive  = [
                     [ p['fitness'],p['parameters'] ]
-                    for r in 'final records unique model models'.split() if r in arx
+                    for r in 'final records unique model models checkpoint'.split() if r in arx
                     for p in arx[r] if not p is None
             ]
         else:
@@ -402,6 +406,10 @@ if __name__ == '__main__':
         exit(1)
 
     evaluation['downsampler']=downsampler
+    if 'savetruedata' in evaluation:
+        del evaluation['savetruedata']
+    if 'inputfile' in evaluation:
+        del evaluation['inputfile']
     evaluator = Evaluator(target, savetruedata=opt.view, **evaluation) 
     if opt.sjson is not None or opt.snpz is not None:
         logging.infor( " ====== ================= ======")
@@ -429,15 +437,28 @@ if __name__ == '__main__':
             for (n,s,l,h),v in zip(prm_nslh,p):
                 if type(n) is list or type(n) is tuple:
                     for r in n:
-                        prm[r] = v
+                        # prm[r] = v
+                        prm[r] = 10**v if s == 'log' else v
+                        #DB>>
+                        # print(f' {r:<32s} = {v} ->{s}-> {prm[r]}')
+                        #<<DB
                 else:
-                    prm[n]=v
+                    # prm[n]=v
+                    prm[n] = 10**v if s == 'log' else v
+                    #DB>>
+                    # print(f' {n:<32s} = {v} ->{s}-> {prm[n]}')
+                    #<<DB
         elif type(p) is dict:
             prm = p
         else:
             raise RuntimeError(f"Unsupported parameters type {type(p)}. It should be list or dictionary")
             exit(1)
-        
+        #DB>>
+        # print(p)
+        # for n in prm:
+            # print(f" {n:<32s} = {prm[n]}")
+        # exit(0)
+        #<<DB
         if opt.view:
             if opt.debug:
                 fitness = RunAndTest(evaluator,celsius=opt.celsius,dt=opt.simdt, params=prm).__run__(view=4)
@@ -450,13 +471,10 @@ if __name__ == '__main__':
         return fitness
     if opt.nthrs > 0:
         import multiprocessing as mp
-        pool = mp.Pool(processes=opt.nthrs)
-        result = [pool.apply_async(worker,[p]) for _,p in collections]
-        pool.close()
-        pool.join()
-        result = [r.get() for r in result]
+        with mp.Pool(processes=opt.nthrs) as pool:
+            result = pool.map(worker,[p for _,p in collections])
     else:
-        result = [ worker(p) for p in collections]
+        result = [ worker(p) for _,p in collections]
     ### <<<---------------------------
 
 
@@ -490,7 +508,10 @@ if __name__ == '__main__':
                 else:
                     trec,recs = result[keypass.recid]
                     print(keypass.recid)
-                suptit.set_text(f"N #{selection[keypass.recid]}")
+                if type(selection) is list:
+                    suptit.set_text(f"N #{selection[keypass.recid]}")
+                else:
+                    suptit.set_text(f"N #{keypass.recid}")
                 for xline,md in zip(xlines,recs):
                     xline.set_ydata(md)
                 f1.canvas.draw()
@@ -516,9 +537,11 @@ if __name__ == '__main__':
         if opt.Fsize is None:
             f1=figure(1,figsize=(16,9)) if opt.Gsave is None else figure(1,figsize=(64,36))
         else:
-             f1=figure(1,figsize=opt.Fsize)
-        
-        suptit = suptitle(f"N #{selection[0]}",fontsize=18)
+            f1=figure(1,figsize=opt.Fsize)
+        if type(selection) is list:
+            suptit = suptitle(f"N #{selection[0]}",fontsize=18)
+        else:
+            suptit = suptitle(f"N #0")
 
         if opt.diff or opt.cdiff:
             subplots = [ subplot2grid( (nh,7),(cid//4,cid%4) ) for cid,c in enumerate(evaluator.TestCurr) ]
@@ -571,7 +594,10 @@ if __name__ == '__main__':
                     self.key = key
             keypass(Ek("home"))
             for i in range(len(result)):
-                f1.savefig(opt.Gsave.format(selection[i]))
+                if type(selection) is list:
+                    f1.savefig(opt.Gsave.format(selection[i]))
+                else:
+                    f1.savefig(opt.Gsave.format(i))
                 keypass(Ek("up"))
 
     elif opt.diff or opt.cdiff:
